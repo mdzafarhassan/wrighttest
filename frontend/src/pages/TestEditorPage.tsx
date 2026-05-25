@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Breadcrumb, Button, Card, Col, Form, Input, Layout, Modal, Radio, Row, Select, Space, Tag, Typography, message, notification } from 'antd';
-import { DownloadOutlined, PlayCircleOutlined, StopOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { DownloadOutlined, PlayCircleOutlined, StopOutlined, VideoCameraOutlined, WarningOutlined } from '@ant-design/icons';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { createTest, getDevices, getEnvironments, getProject, getTest, startRecording, stopRecording, updateTest, validateTestSteps, runTestWithEnvironment } from '../api/client';
 import AppHeader from '../components/AppHeader';
@@ -652,7 +652,35 @@ export default function TestEditorPage() {
   };
 
   const stepAssertionsCount = steps.filter((step) => step.action.startsWith('assert')).length;
-  const stepSummary = `${steps.length} steps · ${stepAssertionsCount} assertion${stepAssertionsCount === 1 ? '' : 's'} · ${getDeviceLabel()} · ${getEnvironmentLabel()}`;
+  const stepSummaryBadges = [
+    <Tag key="steps" color="blue">
+      {steps.length} step{steps.length === 1 ? '' : 's'}
+    </Tag>,
+    stepAssertionsCount === 0 ? (
+      <Tag
+        key="assertions-warning"
+        icon={<WarningOutlined />}
+        style={{
+          marginInlineEnd: 0,
+          background: '#fff7e6',
+          color: '#d46b08',
+          borderColor: '#ffd591'
+        }}
+      >
+        No assertions
+      </Tag>
+    ) : (
+      <Tag key="assertions" color="purple">
+        {stepAssertionsCount} assertion{stepAssertionsCount === 1 ? '' : 's'}
+      </Tag>
+    ),
+    <Tag key="device" color="default">
+      {getDeviceLabel()}
+    </Tag>,
+    <Tag key="environment" color="default">
+      {getEnvironmentLabel()}
+    </Tag>
+  ];
 
   const selectedVariables = Array.from(
     new Set([
@@ -879,7 +907,9 @@ export default function TestEditorPage() {
               }
               extra={
                 <Space wrap>
-                  <Tag color="blue">{stepSummary}</Tag>
+                  <Space wrap size={[8, 8]}>
+                    {stepSummaryBadges}
+                  </Space>
                   {!recording ? (
                     <Button icon={<VideoCameraOutlined />} onClick={handleStartRecording}>
                       Start recording
