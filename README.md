@@ -22,7 +22,7 @@
 - **Suites** - group tests and run them with one click or on schedule
 - **Trace Viewer** - built-in Playwright trace viewer after every run
 - **Notifications** - Telegram / Slack alerts on FAILED
-- **Export** - download tests as `.spec.ts`, run with `npx playwright test`
+- **Export** - download a single `.spec.ts` or a runnable Playwright project `.zip`
 - **Import** - paste existing Playwright script, get a visual test
 - **Dashboard** - pass rate over time and flaky test detection
 
@@ -35,6 +35,7 @@
 | Mobile emulation | ✅ | ⚠️ | ❌ | ✅ |
 | Built-in scheduler | ✅ | ❌ | ❌ | ❌ |
 | Export to `.spec.ts` | ✅ | ❌ | ❌ | ❌ |
+| Export runnable project `.zip` | ✅ | ❌ | ❌ | ❌ |
 | Self-hosted | ✅ | ✅ | ✅ | ❌ |
 | Trace Viewer built-in | ✅ | ❌ | ❌ | ✅ |
 
@@ -169,6 +170,30 @@ docker compose up --build -d
 </p>
 <p align="center"><em>Live recording captures Playwright-ready selectors directly from the browser session.</em></p>
 
+## 📦 Export Playwright Project
+
+Export a complete runnable Playwright project as a `.zip` archive.
+
+The generated project includes:
+- Playwright configuration
+- ready-to-run test files
+- `package.json`
+- optional environment variable support
+- minimal project structure for local IDE usage
+
+After extraction:
+
+```bash
+npm install
+npx playwright install
+npx playwright test
+```
+
+<p align="center">
+  <img src="./docs/export_project.png" alt="Export Playwright project" width="100%" />
+</p>
+<p align="center"><em>Export a runnable Playwright workspace that opens directly in your IDE and runs locally without manual setup.</em></p>
+
 ## 🏗 Architecture
 
 ```text
@@ -208,7 +233,7 @@ Playwright headless
 
 - [ ] Network mocking (`page.route()`)
 - [ ] CLI tool (`wrighttest run --project-id`)
-- [ ] Export full Playwright project
+- [x] Export full Playwright project
 - [ ] Test-to-Doc export
 - [ ] Allure / TestIT integration
 
