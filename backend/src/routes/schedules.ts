@@ -4,6 +4,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import prisma from '../prisma';
 import { schedulerService } from '../services/scheduler';
+import { getAuthUser, getProjectAccessStatusCode, requireProjectRole } from '../utils/project-access';
 
 const ScheduleSchema = z.object({
   name: z.string().min(1).max(100),
@@ -109,11 +110,12 @@ function getNextRunAt(cronExpression: string, referenceDate: Date) {
 
 export async function scheduleRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { projectId: string } }>('/projects/:projectId/schedules', async (req, reply) => {
-    const project = await prisma.project.findUnique({
-      where: { id: req.params.projectId }
-    });
-
-    if (!project) return reply.status(404).send({ error: 'Project not found' });
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(req.params.projectId, userId, ['OWNER', 'EDITOR', 'VIEWER']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
 
     return prisma.schedule.findMany({
       where: { projectId: req.params.projectId },
@@ -166,6 +168,13 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Schedule not found' });
     }
 
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(schedule.projectId, userId, ['OWNER', 'EDITOR', 'VIEWER']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
+
     const page = Math.max(1, Number(req.query.page ?? 1));
     const limit = Math.max(1, Number(req.query.limit ?? 20));
     const skip = (page - 1) * limit;
@@ -213,7 +222,9 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'Invalid cron expression' });
     }
 
+    const { userId } = getAuthUser(req);
     try {
+      await requireProjectRole(req.params.projectId, userId, ['OWNER', 'EDITOR']);
       await validateScheduleTarget(
         req.params.projectId,
         result.data.suiteId ?? undefined,
@@ -249,6 +260,13 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
 
     const current = await loadScheduleOr404(req.params.id);
     if (!current) return reply.status(404).send({ error: 'Schedule not found' });
+
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(current.projectId, userId, ['OWNER', 'EDITOR']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
 
     const next = {
       name: result.data.name ?? current.name,
@@ -294,11 +312,17 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
 
   fastify.delete<{ Params: { id: string } }>('/schedules/:id', async (req, reply) => {
     try {
+      const current = await loadScheduleOr404(req.params.id);
+      if (!current) return reply.status(404).send({ error: 'Schedule not found' });
+
+      const { userId } = getAuthUser(req);
+      await requireProjectRole(current.projectId, userId, ['OWNER', 'EDITOR']);
+
       schedulerService.unregister(req.params.id);
       await prisma.schedule.delete({ where: { id: req.params.id } });
       return reply.status(204).send();
-    } catch {
-      return reply.status(404).send({ error: 'Schedule not found' });
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Schedule not found' });
     }
   });
 }

@@ -3,8 +3,10 @@ import { z } from 'zod';
 import prisma from '../prisma';
 import { interpolate } from '../utils/interpolate';
 import { getRecordingStatus, startRecording, stopRecording } from '../services/recorder';
+import { getAuthUser, getProjectAccessStatusCode, requireProjectRole } from '../utils/project-access';
 
 const StartSchema = z.object({
+  projectId: z.string().min(1),
   url: z.string().min(1),
   environmentId: z.string().optional(),
   device: z.string().optional()
@@ -17,6 +19,14 @@ export async function recordingRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: result.error.flatten() });
     }
 
+    const { userId } = getAuthUser(req);
+
+    try {
+      await requireProjectRole(result.data.projectId, userId, ['OWNER', 'EDITOR']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
+
     try {
       let resolvedUrl = result.data.url;
 
@@ -25,7 +35,7 @@ export async function recordingRoutes(fastify: FastifyInstance) {
           where: { id: result.data.environmentId }
         });
 
-        if (!environment) {
+        if (!environment || environment.projectId !== result.data.projectId) {
           return reply.status(404).send({ error: 'Environment not found' });
         }
 
@@ -42,7 +52,7 @@ export async function recordingRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const sessionId = await startRecording(resolvedUrl, result.data.device);
+      const sessionId = await startRecording(resolvedUrl, result.data.device, result.data.projectId, userId);
       return reply.status(201).send({ sessionId, status: 'active' });
     } catch (err) {
       return reply.status(500).send({
@@ -52,6 +62,16 @@ export async function recordingRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post<{ Params: { id: string } }>('/recordings/:id/stop', async (req, reply) => {
+    const { userId } = getAuthUser(req);
+    const status = getRecordingStatus(req.params.id);
+    if (!status) return reply.status(404).send({ error: 'Session not found' });
+
+    try {
+      await requireProjectRole(status.projectId, userId, ['OWNER', 'EDITOR']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
+
     try {
       const steps = await stopRecording(req.params.id);
       return { steps };
@@ -65,6 +85,13 @@ export async function recordingRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string } }>('/recordings/:id', async (req, reply) => {
     const status = getRecordingStatus(req.params.id);
     if (!status) return reply.status(404).send({ error: 'Session not found' });
+
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(status.projectId, userId, ['OWNER', 'EDITOR']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
     return status;
   });
 }

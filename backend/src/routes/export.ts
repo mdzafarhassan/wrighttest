@@ -1,10 +1,11 @@
-import { FastifyInstance, type FastifyReply } from 'fastify';
+import { FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import prisma from '../prisma';
 import type { Step } from '../types/step';
 import { exportToSpec } from '../services/exporter';
 import { buildPlaywrightProjectZip } from '../services/project-export';
 import { parsePlaywrightSpec } from '../services/importer';
+import { getAuthUser, getProjectAccessStatusCode, requireProjectRole } from '../utils/project-access';
 
 const ImportSchema = z.object({
   code: z.string().min(1),
@@ -21,6 +22,8 @@ type ExportProjectRoute = {
   Body: { envId?: string; useEnvVars?: boolean };
   Querystring: { envId?: string; useEnvVars?: string };
 };
+
+type ExportProjectRequest = FastifyRequest<ExportProjectRoute>;
 
 function sanitizeFilename(name: string) {
   return name
@@ -39,11 +42,21 @@ export async function exportRoutes(fastify: FastifyInstance) {
 
       if (!test) return reply.status(404).send({ error: 'Test not found' });
 
+      const { userId } = getAuthUser(req);
+      try {
+        await requireProjectRole(test.projectId, userId, ['OWNER', 'EDITOR']);
+      } catch (error) {
+        return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+      }
+
       let variables: Record<string, string> = {};
       if (req.query.envId) {
         const environment = await prisma.environment.findUnique({
           where: { id: req.query.envId }
         });
+        if (!environment || environment.projectId !== test.projectId) {
+          return reply.status(404).send({ error: 'Environment not found' });
+        }
         variables = (environment?.variables ?? {}) as Record<string, string>;
       }
 
@@ -60,14 +73,7 @@ export async function exportRoutes(fastify: FastifyInstance) {
     }
   );
 
-  const exportProjectHandler = async (
-    req: {
-      params: { id: string };
-      body?: { envId?: string; useEnvVars?: boolean };
-      query: { envId?: string; useEnvVars?: string };
-    },
-    reply: FastifyReply
-  ) => {
+  const exportProjectHandler = async (req: ExportProjectRequest, reply: FastifyReply) => {
     const payload = {
       envId: req.body?.envId ?? req.query.envId,
       useEnvVars:
@@ -88,11 +94,21 @@ export async function exportRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Test not found' });
     }
 
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(test.projectId, userId, ['OWNER', 'EDITOR']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
+
     let variables: Record<string, string> = {};
     if (body.data.envId) {
       const environment = await prisma.environment.findUnique({
         where: { id: body.data.envId }
       });
+      if (!environment || environment.projectId !== test.projectId) {
+        return reply.status(404).send({ error: 'Environment not found' });
+      }
       variables = (environment?.variables ?? {}) as Record<string, string>;
     }
 

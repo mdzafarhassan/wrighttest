@@ -33,6 +33,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
 import UserMenu from '../components/UserMenu';
+import { useAuth } from '../context/AuthContext';
 import { createProject, deleteProject, getProjects, updateProject } from '../api/client';
 import { getProjectDescription } from '../utils/projectSettings';
 import type { ProjectHealth, ProjectSummary } from '../types';
@@ -78,6 +79,7 @@ function healthMeta(health: ProjectHealth) {
 }
 
 export default function ProjectsPage() {
+  const { canCreateProject } = useAuth();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -118,6 +120,15 @@ export default function ProjectsPage() {
     };
   }, [projects]);
   const hasLoaded = !loading;
+  const createProjectButtonStyle = canCreateProject
+    ? undefined
+    : {
+        opacity: 1,
+        color: '#64748b',
+        background: '#f8fafc',
+        borderColor: '#cbd5e1',
+        boxShadow: 'none'
+      };
 
   const handleCreate = async () => {
     const { name } = await createForm.validateFields();
@@ -217,7 +228,14 @@ export default function ProjectsPage() {
       <AppHeader
         actions={[
           <UserMenu key="menu" />,
-          <Button key="new" type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+          <Button
+            key="new"
+            type={canCreateProject ? 'primary' : 'default'}
+            icon={<PlusOutlined />}
+            onClick={() => setCreateOpen(true)}
+            disabled={!canCreateProject}
+            style={createProjectButtonStyle}
+          >
             New Project
           </Button>
         ]}
@@ -290,9 +308,18 @@ export default function ProjectsPage() {
                       </Space>
                     }
                   >
-                    <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-                      Create project
-                    </Button>
+                    {canCreateProject ? (
+                      <Button
+                        type={canCreateProject ? 'primary' : 'default'}
+                        icon={<PlusOutlined />}
+                        onClick={() => setCreateOpen(true)}
+                        style={createProjectButtonStyle}
+                      >
+                        Create project
+                      </Button>
+                    ) : (
+                      <Text type="secondary">Project creation is not available for read-only access.</Text>
+                    )}
                   </Empty>
                 ) : (
                   <Table<ProjectSummary>
@@ -474,7 +501,13 @@ export default function ProjectsPage() {
                   <li>Add Telegram or Slack alerts</li>
                 </ol>
 
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+                <Button
+                  type={canCreateProject ? 'primary' : 'default'}
+                  icon={<PlusOutlined />}
+                  onClick={() => setCreateOpen(true)}
+                  disabled={!canCreateProject}
+                  style={createProjectButtonStyle}
+                >
                   New Project
                 </Button>
               </div>

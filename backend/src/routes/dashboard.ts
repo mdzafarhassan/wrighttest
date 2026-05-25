@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { Prisma, type RunStatus } from '@prisma/client';
 import prisma from '../prisma';
+import { getAccessibleProjectIds, getAuthUser } from '../utils/project-access';
 
 type DashboardRun = {
   id: string;
@@ -42,7 +43,7 @@ function getTriggerLabel(run: DashboardRun) {
 }
 
 async function loadRuns(params: {
-  projectId?: string;
+  projectIds?: string[];
   days: number;
   limit: number;
 }) {
@@ -51,7 +52,7 @@ async function loadRuns(params: {
   const runs = await prisma.testRun.findMany({
     where: {
       startedAt: { gte: since },
-      ...(params.projectId ? { test: { projectId: params.projectId } } : {})
+      ...(params.projectIds && params.projectIds.length > 0 ? { test: { projectId: { in: params.projectIds } } } : {})
     },
     select: {
       id: true,
@@ -88,7 +89,7 @@ async function loadRuns(params: {
 }
 
 function buildRunHistoryWhere(params: {
-  projectId?: string;
+  projectIds?: string[];
   days: number;
   status: RunHistoryStatusFilter;
   trigger: RunHistoryTriggerFilter;
@@ -99,8 +100,8 @@ function buildRunHistoryWhere(params: {
     where.startedAt = { gte: new Date(Date.now() - params.days * 24 * 60 * 60 * 1000) };
   }
 
-  if (params.projectId) {
-    where.test = { projectId: params.projectId };
+  if (params.projectIds) {
+    where.test = { projectId: { in: params.projectIds } };
   }
 
   if (params.status !== 'all') {
@@ -120,9 +121,12 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
   fastify.get<{
     Querystring: { projectId?: string; days?: string }
   }>('/dashboard', async (req) => {
+    const { userId } = getAuthUser(req);
+    const accessibleProjectIds = await getAccessibleProjectIds(userId);
+    const projectIds = req.query.projectId ? accessibleProjectIds.filter((id) => id === req.query.projectId) : accessibleProjectIds;
     const days = Number(req.query.days ?? 30);
     const runs = await loadRuns({
-      projectId: req.query.projectId,
+      projectIds,
       days,
       limit: 8
     });
@@ -281,12 +285,17 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
   fastify.get<{
     Querystring: { projectId?: string; days?: string; limit?: string; status?: string; trigger?: string }
   }>('/runs', async (req) => {
+    const { userId } = getAuthUser(req);
+    const accessibleProjectIds = await getAccessibleProjectIds(userId);
     const days = Number(req.query.days ?? 30);
     const limit = Math.min(Number(req.query.limit ?? 100), 500);
     const status = (req.query.status === 'passed' || req.query.status === 'failed' ? req.query.status : 'all') as RunHistoryStatusFilter;
     const trigger = (req.query.trigger === 'manual' || req.query.trigger === 'schedule' ? req.query.trigger : 'all') as RunHistoryTriggerFilter;
+    const projectIds = req.query.projectId
+      ? accessibleProjectIds.filter((id) => id === req.query.projectId)
+      : accessibleProjectIds;
     const where = buildRunHistoryWhere({
-      projectId: req.query.projectId,
+      projectIds,
       days,
       status,
       trigger
@@ -378,12 +387,20 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
   fastify.get<{
     Querystring: { projectId?: string }
   }>('/dashboard/flaky', async (req) => {
+    const { userId } = getAuthUser(req);
+    const accessibleProjectIds = await getAccessibleProjectIds(userId);
     const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const runs = await prisma.testRun.findMany({
       where: {
         startedAt: { gte: since },
-        ...(req.query.projectId ? { test: { projectId: req.query.projectId } } : {})
+        test: {
+          projectId: {
+            in: req.query.projectId
+              ? accessibleProjectIds.filter((id) => id === req.query.projectId)
+              : accessibleProjectIds
+          }
+        }
       },
       select: {
         testId: true,

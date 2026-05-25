@@ -4,6 +4,7 @@ import prisma from '../prisma';
 import { CreateTestSchema, StepSchema, UpdateTestSchema } from '../schemas/test.schema';
 import { runValidationInSubprocess } from '../services/validation-runner';
 import { getAvailableDevices } from '../utils/devices';
+import { getAuthUser, getProjectAccessStatusCode, requireProjectRole } from '../utils/project-access';
 
 const urlOrTemplate = z.string().refine((value) => {
   if (value.includes('{{')) return true;
@@ -18,6 +19,7 @@ const urlOrTemplate = z.string().refine((value) => {
 });
 
 const ValidateStepsSchema = z.object({
+  projectId: z.string().min(1),
   url: urlOrTemplate,
   steps: z.array(StepSchema).default([]),
   device: z.string().optional()
@@ -38,11 +40,12 @@ function normalizeEnvironmentId(environmentId?: string | null) {
 
 export async function testRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { projectId: string } }>('/projects/:projectId/tests', async (req, reply) => {
-    const project = await prisma.project.findUnique({
-      where: { id: req.params.projectId }
-    });
-
-    if (!project) return reply.status(404).send({ error: 'Project not found' });
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(req.params.projectId, userId, ['OWNER', 'EDITOR', 'VIEWER']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
 
     return prisma.test.findMany({
       where: { projectId: req.params.projectId },
@@ -58,6 +61,12 @@ export async function testRoutes(fastify: FastifyInstance) {
     });
 
     if (!test) return reply.status(404).send({ error: 'Test not found' });
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(test.projectId, userId, ['OWNER', 'EDITOR', 'VIEWER']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
     return test;
   });
 
@@ -72,6 +81,13 @@ export async function testRoutes(fastify: FastifyInstance) {
     });
 
     if (!project) return reply.status(404).send({ error: 'Project not found' });
+
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(req.params.projectId, userId, ['OWNER', 'EDITOR']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
 
     const test = await prisma.test.create({
       data: {
@@ -101,17 +117,26 @@ export async function testRoutes(fastify: FastifyInstance) {
         }
       });
       return test;
-    } catch {
-      return reply.status(404).send({ error: 'Test not found' });
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Test not found' });
     }
   });
 
   fastify.delete<{ Params: { id: string } }>('/tests/:id', async (req, reply) => {
     try {
+      const test = await prisma.test.findUnique({
+        where: { id: req.params.id },
+        select: { projectId: true }
+      });
+      if (!test) return reply.status(404).send({ error: 'Test not found' });
+
+      const { userId } = getAuthUser(req);
+      await requireProjectRole(test.projectId, userId, ['OWNER', 'EDITOR']);
+
       await prisma.test.delete({ where: { id: req.params.id } });
       return reply.status(204).send();
-    } catch {
-      return reply.status(404).send({ error: 'Test not found' });
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Test not found' });
     }
   });
 
@@ -119,6 +144,13 @@ export async function testRoutes(fastify: FastifyInstance) {
     const result = ValidateStepsSchema.safeParse(req.body);
     if (!result.success) {
       return reply.status(400).send({ error: result.error.flatten() });
+    }
+
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(result.data.projectId, userId, ['OWNER', 'EDITOR']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
     }
 
     try {

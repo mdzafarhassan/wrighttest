@@ -7,6 +7,8 @@ const EMAIL_KEY = 'wt_email';
 interface AuthContextType {
   token: string | null;
   email: string | null;
+  canCreateProject: boolean;
+  isSystemAdmin: boolean;
   ready: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
@@ -18,6 +20,8 @@ const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
   const [email, setEmail] = useState<string | null>(() => localStorage.getItem(EMAIL_KEY));
+  const [canCreateProject, setCanCreateProject] = useState(false);
+  const [isSystemAdmin, setIsSystemAdmin] = useState(false);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -58,10 +62,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const { data } = await api.get<{ userId: string; email: string }>('/auth/me');
+        const { data } = await api.get<{ userId: string; email: string; canCreateProject: boolean; isSystemAdmin: boolean }>('/auth/me');
         if (!cancelled && data.email && data.email !== email) {
           localStorage.setItem(EMAIL_KEY, data.email);
           setEmail(data.email);
+        }
+        if (!cancelled) {
+          setCanCreateProject(Boolean(data.canCreateProject));
+          setIsSystemAdmin(Boolean(data.isSystemAdmin));
         }
       } catch {
         localStorage.removeItem(TOKEN_KEY);
@@ -69,6 +77,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelled) {
           setToken(null);
           setEmail(null);
+          setCanCreateProject(false);
+          setIsSystemAdmin(false);
         }
       } finally {
         if (!cancelled) setReady(true);
@@ -83,7 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = async (nextEmail: string, password: string) => {
-    const { data } = await api.post<{ token: string; email: string }>('/auth/login', {
+    const { data } = await api.post<{ token: string; email: string; canCreateProject: boolean; isSystemAdmin: boolean }>('/auth/login', {
       email: nextEmail,
       password
     });
@@ -92,6 +102,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(EMAIL_KEY, data.email);
     setToken(data.token);
     setEmail(data.email);
+    setCanCreateProject(Boolean(data.canCreateProject));
+    setIsSystemAdmin(Boolean(data.isSystemAdmin));
     setReady(true);
   };
 
@@ -100,6 +112,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(EMAIL_KEY);
     setToken(null);
     setEmail(null);
+    setCanCreateProject(false);
+    setIsSystemAdmin(false);
   };
 
   const changePassword = async (currentPassword: string, newPassword: string) => {
@@ -109,11 +123,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthContextType>(() => ({
     token,
     email,
+    canCreateProject,
+    isSystemAdmin,
     ready,
     login,
     logout,
     changePassword
-  }), [token, email, ready]);
+  }), [token, email, canCreateProject, isSystemAdmin, ready]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

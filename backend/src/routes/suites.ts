@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import prisma from '../prisma';
 import { testQueue } from '../queue/queue';
+import { getAuthUser, getProjectAccessStatusCode, requireProjectRole } from '../utils/project-access';
 
 const SuiteSchema = z.object({
   name: z.string().min(1).max(100),
@@ -18,11 +19,12 @@ function suiteTestIds(value: unknown): string[] {
 
 export async function suiteRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { projectId: string } }>('/projects/:projectId/suites', async (req, reply) => {
-    const project = await prisma.project.findUnique({
-      where: { id: req.params.projectId }
-    });
-
-    if (!project) return reply.status(404).send({ error: 'Project not found' });
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(req.params.projectId, userId, ['OWNER', 'EDITOR', 'VIEWER']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
 
     return prisma.suite.findMany({
       where: { projectId: req.params.projectId },
@@ -37,11 +39,12 @@ export async function suiteRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: result.error.flatten() });
     }
 
-    const project = await prisma.project.findUnique({
-      where: { id: req.params.projectId }
-    });
-
-    if (!project) return reply.status(404).send({ error: 'Project not found' });
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(req.params.projectId, userId, ['OWNER', 'EDITOR']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
 
     if (result.data.testIds.length === 0) {
       return reply.status(400).send({ error: 'Select at least one test' });
@@ -79,6 +82,9 @@ export async function suiteRoutes(fastify: FastifyInstance) {
 
       if (!current) return reply.status(404).send({ error: 'Suite not found' });
 
+      const { userId } = getAuthUser(req);
+      await requireProjectRole(current.projectId, userId, ['OWNER', 'EDITOR']);
+
       const nextName = result.data.name ?? current.name;
       const nextTestIds = result.data.testIds ? suiteTestIds(result.data.testIds) : suiteTestIds(current.testIds);
 
@@ -114,10 +120,19 @@ export async function suiteRoutes(fastify: FastifyInstance) {
 
   fastify.delete<{ Params: { id: string } }>('/suites/:id', async (req, reply) => {
     try {
+      const current = await prisma.suite.findUnique({
+        where: { id: req.params.id },
+        select: { projectId: true }
+      });
+      if (!current) return reply.status(404).send({ error: 'Suite not found' });
+
+      const { userId } = getAuthUser(req);
+      await requireProjectRole(current.projectId, userId, ['OWNER', 'EDITOR']);
+
       await prisma.suite.delete({ where: { id: req.params.id } });
       return reply.status(204).send();
-    } catch {
-      return reply.status(404).send({ error: 'Suite not found' });
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Suite not found' });
     }
   });
 
@@ -132,6 +147,13 @@ export async function suiteRoutes(fastify: FastifyInstance) {
     });
 
     if (!suite) return reply.status(404).send({ error: 'Suite not found' });
+
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(suite.projectId, userId, ['OWNER', 'EDITOR']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
 
     const testIds = suiteTestIds(suite.testIds);
     if (testIds.length === 0) {

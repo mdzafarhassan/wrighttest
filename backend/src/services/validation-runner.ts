@@ -4,6 +4,7 @@ import type { Step } from '../types/step';
 import type { ValidationReport } from './validator';
 
 type ValidateRequest = {
+  projectId?: string;
   url: string;
   steps: Step[];
   device?: string;
@@ -40,7 +41,7 @@ export function runValidationInSubprocess(
     process.execPath,
     [runnerPath],
     {
-      input: JSON.stringify({ url, steps, device } satisfies ValidateRequest),
+      input: JSON.stringify({ projectId: undefined, url, steps, device } satisfies ValidateRequest),
       encoding: 'utf8',
       env: buildValidationEnv()
     }

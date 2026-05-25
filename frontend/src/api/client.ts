@@ -5,6 +5,7 @@ import type {
   NotificationChannel,
   NotificationChannelType,
   Project,
+  ProjectMember,
   ProjectWorkspace,
   ProjectSummary,
   Schedule,
@@ -70,6 +71,28 @@ export const updateProject = (id: string, data: { name: string }) =>
 
 export const getProject = (id: string) =>
   api.get<ProjectWorkspace>(`/projects/${id}`).then((r) => r.data);
+
+export const getProjectMembers = (projectId: string) =>
+  api.get<ProjectMember[]>(`/projects/${projectId}/members`).then((r) => r.data);
+
+export const checkUserExists = (email: string) =>
+  api.get<{ exists: boolean }>('/users/exists', {
+    params: { email }
+  }).then((r) => r.data);
+
+export const addProjectMember = (
+  projectId: string,
+  data: { email: string; password?: string; role: ProjectMember['role'] }
+) => api.post<ProjectMember>(`/projects/${projectId}/members`, data).then((r) => r.data);
+
+export const updateProjectMember = (
+  projectId: string,
+  memberId: string,
+  data: { role: ProjectMember['role'] }
+) => api.patch<ProjectMember>(`/projects/${projectId}/members/${memberId}`, data).then((r) => r.data);
+
+export const deleteProjectMember = (projectId: string, memberId: string) =>
+  api.delete(`/projects/${projectId}/members/${memberId}`);
 
 export const getDevices = () =>
   api.get<{ label: string; value: string }[]>('/devices').then((r) => r.data);
@@ -232,16 +255,18 @@ export const getRun = (runId: string) =>
 export const getTestRuns = (testId: string) =>
   api.get<TestRun[]>(`/tests/${testId}/runs`).then((r) => r.data);
 
-export const validateTestSteps = (url: string, steps: Step[], device?: string | null) =>
+export const validateTestSteps = (projectId: string, url: string, steps: Step[], device?: string | null) =>
   api.post<ValidationReport>('/tests/validate', {
+    projectId,
     url,
     steps,
     device: device || undefined
   }).then((r) => r.data);
 
-export const startRecording = (url: string, environmentId?: string, device?: string) =>
+export const startRecording = (url: string, projectId: string, environmentId?: string, device?: string) =>
   api.post<{ sessionId: string; status: string }>('/recordings/start', {
     url,
+    projectId,
     environmentId,
     device
   }).then((r) => r.data);

@@ -99,15 +99,34 @@ export interface ProjectWorkspace extends Project {
   summary: ProjectWorkspaceSummary;
   tests: ProjectCheck[];
   suites?: Array<Suite & { schedules: ProjectCheckSchedule[] }>;
+  currentUserRole?: ProjectRole;
+  members?: ProjectMember[];
 }
 
 export type ProjectHealth = 'passing' | 'failing' | 'flaky' | 'no_runs';
+
+export type ProjectRole = 'OWNER' | 'EDITOR' | 'VIEWER';
+export type ProjectMemberStatus = 'ACTIVE' | 'PENDING';
+
+export interface ProjectMember {
+  id: string;
+  projectId: string;
+  userId?: string | null;
+  email: string;
+  role: ProjectRole;
+  status: ProjectMemberStatus;
+  createdAt: string;
+  updatedAt: string;
+  user?: { email: string } | null;
+  isSystemAdmin?: boolean;
+}
 
 export interface ProjectSummary {
   id: string;
   name: string;
   createdAt: string;
   updatedAt: string;
+  currentUserRole?: ProjectRole | null;
   checksCount: number;
   activeSchedulesCount: number;
   alertChannelsCount: number;

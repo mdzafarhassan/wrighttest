@@ -17,6 +17,7 @@ model Project {
   channels  NotificationChannel[]
   suites    Suite[]
   schedules Schedule[]
+  members   ProjectMember[]
 }
 
 model User {
@@ -24,6 +25,7 @@ model User {
   email        String   @unique
   passwordHash String
   createdAt    DateTime @default(now())
+  memberships  ProjectMember[]
 }
 
 model Test {
@@ -121,9 +123,38 @@ model NotificationChannel {
   createdAt DateTime @default(now())
 }
 
+model ProjectMember {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String?
+  email     String
+  role      ProjectRole
+  status    ProjectMemberStatus @default(ACTIVE)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, email])
+  @@index([projectId])
+  @@index([userId])
+}
+
 enum RunStatus {
   PENDING
   RUNNING
   PASSED
   FAILED
+}
+
+enum ProjectRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+enum ProjectMemberStatus {
+  ACTIVE
+  PENDING
 }

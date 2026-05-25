@@ -61,7 +61,7 @@ docker compose up --build
 
 Default admin login is defined in `.env`:
 
-- `ADMIN_EMAIL=admin@wrighttest.com`
+- `ADMIN_EMAIL=admin@wrighttest.app`
 - `ADMIN_PASSWORD=changeme`
 
 On an empty database the seed also creates a `Docker Demo` project with two sample tests, a `DEV` environment, a `Smoke Test` suite, and an hourly schedule.
@@ -193,6 +193,42 @@ npx playwright test
   <img src="./docs/export_project.png" alt="Export Playwright project" width="100%" />
 </p>
 <p align="center"><em>Export a runnable Playwright workspace that opens directly in your IDE and runs locally without manual setup.</em></p>
+
+## 👥 Project Roles
+
+WrightTest supports project-level access roles to control who can edit, run, and manage a project.
+
+### Editor
+
+Editors can:
+- create and edit checks
+- run checks
+- use recording
+- manage schedules and environments
+- export Playwright specs and projects
+- view runs, screenshots, and traces
+
+### Viewer
+
+Viewers have read-only access.
+
+Viewers can:
+- view checks and steps
+- inspect runs and results
+- open screenshots and traces
+- explore project structure
+
+Viewers cannot:
+- modify checks
+- run checks
+- start recording
+- edit environments or schedules
+- manage project members
+
+<p align="center">
+  <img src="./docs/roles.png" alt="Project roles and read-only access" width="100%" />
+</p>
+<p align="center"><em>Project-level roles keep Viewer accounts read-only while Editors can manage checks, schedules, environments, and exports.</em></p>
 
 ## 🏗 Architecture
 

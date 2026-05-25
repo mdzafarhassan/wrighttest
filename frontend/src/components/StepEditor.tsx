@@ -58,6 +58,7 @@ const ACTION_OPTIONS: ActionOption[] = [
 interface Props {
   steps: Step[];
   onChange: (steps: Step[]) => void;
+  readOnly?: boolean;
   validationResults?: StepValidationResult[];
   stepIssues?: Array<{
     message?: string;
@@ -133,7 +134,7 @@ function variableHint(value?: string) {
   );
 }
 
-export default function StepEditor({ steps, onChange, validationResults, stepIssues = [], variableNames = [] }: Props) {
+export default function StepEditor({ steps, onChange, readOnly = false, validationResults, stepIssues = [], variableNames = [] }: Props) {
   const addStep = () => onChange([...steps, { action: 'goto', value: '' }]);
 
   const removeStep = (index: number) => onChange(steps.filter((_, idx) => idx !== index));
@@ -200,14 +201,15 @@ export default function StepEditor({ steps, onChange, validationResults, stepIss
                 trigger={['click']}
                 menu={{
                   items: [
-                    { key: 'duplicate', icon: <CopyOutlined />, label: 'Duplicate step' },
-                    { key: 'move-up', icon: <HolderOutlined />, label: 'Move up', disabled: index === 0 },
-                    { key: 'move-down', icon: <HolderOutlined />, label: 'Move down', disabled: index === steps.length - 1 },
+                    { key: 'duplicate', icon: <CopyOutlined />, label: 'Duplicate step', disabled: readOnly },
+                    { key: 'move-up', icon: <HolderOutlined />, label: 'Move up', disabled: readOnly || index === 0 },
+                    { key: 'move-down', icon: <HolderOutlined />, label: 'Move down', disabled: readOnly || index === steps.length - 1 },
                     { type: 'divider' },
-                    { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true }
+                    { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true, disabled: readOnly }
                   ],
                   onClick: ({ key, domEvent }) => {
                     domEvent.stopPropagation();
+                    if (readOnly) return;
                     if (key === 'duplicate') duplicateStep(index);
                     if (key === 'move-up') moveStep(index, -1);
                     if (key === 'move-down') moveStep(index, 1);
@@ -215,7 +217,7 @@ export default function StepEditor({ steps, onChange, validationResults, stepIss
                   }
                 }}
               >
-                <Button icon={<DownOutlined />} size="small">
+                <Button icon={<DownOutlined />} size="small" disabled={readOnly}>
                   More
                 </Button>
               </Dropdown>
@@ -243,6 +245,7 @@ export default function StepEditor({ steps, onChange, validationResults, stepIss
                 <Select
                   value={step.action}
                   style={{ width: '100%' }}
+                  disabled={readOnly}
                   onChange={(action) => updateStep(index, { action })}
                 >
                   <Select.OptGroup label="Actions">
@@ -274,6 +277,7 @@ export default function StepEditor({ steps, onChange, validationResults, stepIss
                     placeholder="CSS selector or Playwright locator"
                     value={step.selector ?? ''}
                     style={{ width: '100%' }}
+                    disabled={readOnly}
                     status={fieldIssue?.selector ? 'error' : undefined}
                     suffix={variableHint(step.selector)}
                     variableNames={variableNames}
@@ -298,6 +302,7 @@ export default function StepEditor({ steps, onChange, validationResults, stepIss
                       placeholder="Value"
                       value={step.value ?? ''}
                       style={{ width: '100%' }}
+                      disabled={readOnly}
                       status={fieldIssue?.value ? 'error' : undefined}
                       onChange={(event) => updateStep(index, { value: event.target.value })}
                       onInput={(event) => updateStep(index, { value: event.currentTarget.value })}
@@ -307,6 +312,7 @@ export default function StepEditor({ steps, onChange, validationResults, stepIss
                       placeholder={step.action === 'goto' ? 'https://example.com' : 'Value'}
                       value={step.value ?? ''}
                       style={{ width: '100%' }}
+                      disabled={readOnly}
                       status={fieldIssue?.value ? 'error' : undefined}
                       suffix={variableHint(step.value)}
                       variableNames={variableNames}
@@ -331,6 +337,7 @@ export default function StepEditor({ steps, onChange, validationResults, stepIss
                     placeholder={getExpectedPlaceholder(step.action)}
                     value={step.expected ?? ''}
                     style={{ width: '100%' }}
+                    disabled={readOnly}
                     status={fieldIssue?.expected ? 'error' : undefined}
                     suffix={variableHint(step.expected)}
                     variableNames={variableNames}
@@ -365,6 +372,7 @@ export default function StepEditor({ steps, onChange, validationResults, stepIss
                 <div style={{ flex: '0 0 140px', minWidth: 0, display: 'flex', alignItems: 'flex-start' }}>
                   <Checkbox
                     checked={step.options?.exact ?? false}
+                    disabled={readOnly}
                     onChange={(e) =>
                       updateStep(index, {
                         options: {
@@ -382,7 +390,7 @@ export default function StepEditor({ steps, onChange, validationResults, stepIss
           </Card>
         );
       })}
-      <Button icon={<PlusOutlined />} onClick={addStep} type="dashed" block>
+      <Button icon={<PlusOutlined />} onClick={addStep} type="dashed" block disabled={readOnly}>
         Add step
       </Button>
     </div>

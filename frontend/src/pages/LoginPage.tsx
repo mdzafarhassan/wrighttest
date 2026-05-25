@@ -63,7 +63,7 @@ export default function LoginPage() {
 
           <Form layout="vertical" onFinish={handleSubmit}>
             <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email' }]}>
-              <Input prefix={<UserOutlined />} placeholder="admin@wrighttest.com" size="large" />
+              <Input prefix={<UserOutlined />} placeholder="Email" size="large" />
             </Form.Item>
             <Form.Item name="password" label="Password" rules={[{ required: true }]}>
               <Input.Password prefix={<LockOutlined />} placeholder="Password" size="large" />

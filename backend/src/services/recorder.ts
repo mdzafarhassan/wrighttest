@@ -13,6 +13,8 @@ interface RecordingSession {
   process: ChildProcess;
   outputFile: string;
   startUrl: string;
+  projectId: string;
+  userId: string;
   status: 'active' | 'stopped';
 }
 
@@ -218,7 +220,7 @@ async function stopActiveSessions() {
   sessions.clear();
 }
 
-export async function startRecording(startUrl: string, device?: string): Promise<string> {
+export async function startRecording(startUrl: string, device?: string, projectId?: string, userId?: string): Promise<string> {
   await fsPromises.mkdir(TMP_DIR, { recursive: true });
 
   const id = uuidv4();
@@ -280,6 +282,8 @@ export async function startRecording(startUrl: string, device?: string): Promise
     process: proc,
     outputFile,
     startUrl: resolvedUrl,
+    projectId: projectId ?? '',
+    userId: userId ?? '',
     status: 'active'
   });
 
@@ -317,6 +321,8 @@ export function getRecordingStatus(id: string) {
     id: session.id,
     status: session.status,
     startUrl: session.startUrl,
-    outputFile: session.outputFile
+    outputFile: session.outputFile,
+    projectId: session.projectId,
+    userId: session.userId
   };
 }

@@ -157,6 +157,7 @@ export default function TestEditorPage() {
   const [novncAvailable, setNovncAvailable] = useState(false);
   const [projectName, setProjectName] = useState('');
   const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(projectId);
+  const [currentProjectRole, setCurrentProjectRole] = useState<'OWNER' | 'EDITOR' | 'VIEWER' | null>(null);
   const [stepIssues, setStepIssues] = useState<Array<StepIssue | undefined>>([]);
   const [firstInvalidStepIndex, setFirstInvalidStepIndex] = useState<number | null>(null);
   const [initialSnapshotReady, setInitialSnapshotReady] = useState(false);
@@ -165,6 +166,7 @@ export default function TestEditorPage() {
   const navigate = useNavigate();
   const [confirmModal, confirmModalContextHolder] = Modal.useModal();
   const isEdit = Boolean(testId);
+  const isReadOnly = currentProjectRole === 'VIEWER';
   const checkName = Form.useWatch('name', form);
   const selectedUrl = Form.useWatch('url', form);
   const selectedDevice = Form.useWatch('device', form);
@@ -176,7 +178,10 @@ export default function TestEditorPage() {
     if (projectId) {
       setCurrentProjectId(projectId);
       void getProject(projectId)
-        .then((project) => setProjectName(project.name))
+        .then((project) => {
+          setProjectName(project.name);
+          setCurrentProjectRole(project.currentUserRole ?? null);
+        })
         .catch(() => setProjectName(''));
     }
 
@@ -202,6 +207,9 @@ export default function TestEditorPage() {
       setRecordingProjectId(test.projectId);
       setCurrentProjectId(test.projectId);
       setSelectedRecordingEnvironmentId(test.environmentId ?? undefined);
+      void getProject(test.projectId)
+        .then((project) => setCurrentProjectRole(project.currentUserRole ?? null))
+        .catch(() => setCurrentProjectRole(null));
       setValidationTracePath(undefined);
       setValidationFeedback(null);
       setStepIssues([]);
@@ -362,7 +370,7 @@ export default function TestEditorPage() {
 
     setValidating(true);
     try {
-      const report = await validateTestSteps(values.url, currentSteps, values.device);
+      const report = await validateTestSteps(currentProjectId ?? projectId ?? '', values.url, currentSteps, values.device);
       setValidationResults(report.results);
       setValidationTracePath(report.tracePath);
       if (report.tracePath) {
@@ -438,6 +446,11 @@ export default function TestEditorPage() {
   };
 
   const handleRunCheck = async () => {
+    if (isReadOnly) {
+      message.warning('Read-only access');
+      return;
+    }
+
     const values = {
       ...(await form.validateFields()),
       device: form.getFieldValue('device') || undefined
@@ -476,6 +489,11 @@ export default function TestEditorPage() {
   };
 
   const handleStartRecording = async () => {
+    if (isReadOnly) {
+      message.warning('Read-only access');
+      return;
+    }
+
     const url = form.getFieldValue('url');
     const device = form.getFieldValue('device') || undefined;
     if (!url) {
@@ -513,7 +531,7 @@ export default function TestEditorPage() {
         }
       }
 
-      const data = await startRecording(url, undefined, device);
+      const data = await startRecording(url, recordingProjectId || currentProjectId || projectId || '', undefined, device);
       setSessionId(data.sessionId);
       setRecording(true);
       setRecordModalOpen(false);
@@ -524,13 +542,18 @@ export default function TestEditorPage() {
   };
 
   const handleConfirmRecordingStart = async () => {
+    if (isReadOnly) {
+      message.warning('Read-only access');
+      return;
+    }
+
     const url = form.getFieldValue('url');
     const device = form.getFieldValue('device') || undefined;
     if (!url) return;
 
     setRecordLoading(true);
     try {
-      const data = await startRecording(url, selectedRecordingEnvironmentId || undefined, device);
+      const data = await startRecording(url, recordingProjectId || currentProjectId || projectId || '', selectedRecordingEnvironmentId || undefined, device);
       setSessionId(data.sessionId);
       setRecording(true);
       setRecordModalOpen(false);
@@ -560,6 +583,10 @@ export default function TestEditorPage() {
   };
 
   const handleOpenExport = (kind: 'spec' | 'project') => {
+    if (isReadOnly) {
+      message.warning('Read-only access');
+      return;
+    }
     setExportKind(kind);
     setExportEnvId(recordEnvironments[0]?.id);
     setExportMode(recordEnvironments.length > 0 ? 'inline' : 'raw');
@@ -567,6 +594,11 @@ export default function TestEditorPage() {
   };
 
   const handleDownloadExport = () => {
+    if (isReadOnly) {
+      message.warning('Read-only access');
+      return;
+    }
+
     const params = new URLSearchParams();
     if (exportMode === 'inline' && !exportEnvId) {
       message.warning('Select an environment for inline export');
@@ -613,6 +645,11 @@ export default function TestEditorPage() {
   };
 
   const handleValidateAndSave = async () => {
+    if (isReadOnly) {
+      message.warning('Read-only access');
+      return;
+    }
+
     const values = {
       ...(await form.validateFields()),
       device: form.getFieldValue('device') || undefined
@@ -786,7 +823,7 @@ export default function TestEditorPage() {
   };
   const exportTrigger = (
     <Dropdown menu={exportMenu} trigger={['click']}>
-      <Button icon={<DownloadOutlined />} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <Button icon={<DownloadOutlined />} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} disabled={isReadOnly}>
         <span>Export</span>
         <DownOutlined />
       </Button>
@@ -817,17 +854,26 @@ export default function TestEditorPage() {
                   <Text type="secondary" style={{ maxWidth: 760 }}>
                     Update the browser flow, target, device, and assertions for this check.
                   </Text>
+                  {isReadOnly && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="Read-only access"
+                      description="You can view this check, but you cannot make changes."
+                      style={{ marginTop: 8, width: 'fit-content' }}
+                    />
+                  )}
                 </div>
 
                 <Space wrap align="center">
-                  <Button icon={<PlayCircleOutlined />} onClick={() => void handleRunCheck()}>
+                  <Button icon={<PlayCircleOutlined />} onClick={() => void handleRunCheck()} disabled={isReadOnly}>
                     Run check
                   </Button>
-                  <Button icon={<VideoCameraOutlined />} onClick={handleStartRecording}>
+                  <Button icon={<VideoCameraOutlined />} onClick={handleStartRecording} disabled={isReadOnly}>
                     Start recording
                   </Button>
                   {exportTrigger}
-                  <Button type="primary" loading={saving || validating} disabled={!isDirty || saving || validating} onClick={handleValidateAndSave}>
+                  <Button type="primary" loading={saving || validating} disabled={isReadOnly || !isDirty || saving || validating} onClick={handleValidateAndSave}>
                     Save changes
                   </Button>
                 </Space>
@@ -900,6 +946,7 @@ export default function TestEditorPage() {
                         placeholder="{{BASE_URL}}/projects or https://example.com"
                         size="large"
                         variableNames={environmentVariableNames}
+                        disabled={isReadOnly}
                       />
                     </Form.Item>
                   </Col>
@@ -909,6 +956,7 @@ export default function TestEditorPage() {
                       <Select
                         allowClear
                         value={selectedRecordingEnvironmentId}
+                        disabled={isReadOnly}
                         onChange={(value) => setSelectedRecordingEnvironmentId(value)}
                         placeholder="No environment selected"
                         style={{ width: '100%' }}
@@ -952,21 +1000,21 @@ export default function TestEditorPage() {
                   <Space wrap size={[8, 8]}>
                     {stepSummaryBadges}
                   </Space>
-                  {!recording ? (
-                    <Button icon={<VideoCameraOutlined />} onClick={handleStartRecording}>
-                      Start recording
-                    </Button>
-                  ) : (
-                    <Button icon={<StopOutlined />} onClick={handleStopRecording} danger>
-                      Stop recording
-                    </Button>
-                  )}
-                  <Button onClick={() => setSteps((current) => [...current, { action: 'goto', value: '' }])}>
-                    Add step
-                  </Button>
-                  <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => void handleRunCheck()} disabled={saving || validating}>
-                    Run check
-                  </Button>
+                      {!recording ? (
+                        <Button icon={<VideoCameraOutlined />} onClick={handleStartRecording} disabled={isReadOnly}>
+                          Start recording
+                        </Button>
+                      ) : (
+                        <Button icon={<StopOutlined />} onClick={handleStopRecording} danger disabled={isReadOnly}>
+                          Stop recording
+                        </Button>
+                      )}
+                      <Button onClick={() => setSteps((current) => [...current, { action: 'goto', value: '' }])} disabled={isReadOnly}>
+                        Add step
+                      </Button>
+                      <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => void handleRunCheck()} disabled={isReadOnly || saving || validating}>
+                        Run check
+                      </Button>
                 </Space>
               }
               style={{
@@ -1016,6 +1064,7 @@ export default function TestEditorPage() {
                   <StepEditor
                     steps={steps}
                     onChange={handleStepsChange}
+                    readOnly={isReadOnly}
                     stepIssues={stepIssues}
                     validationResults={validationResults}
                     variableNames={environmentVariableNames}
@@ -1029,15 +1078,15 @@ export default function TestEditorPage() {
                       </Text>
                       <Space wrap>
                         {!recording ? (
-                          <Button icon={<VideoCameraOutlined />} onClick={handleStartRecording}>
+                          <Button icon={<VideoCameraOutlined />} onClick={handleStartRecording} disabled={isReadOnly}>
                             Start recording
                           </Button>
                         ) : (
-                          <Button icon={<StopOutlined />} onClick={handleStopRecording} danger>
+                          <Button icon={<StopOutlined />} onClick={handleStopRecording} danger disabled={isReadOnly}>
                             Stop recording
                           </Button>
                         )}
-                        <Button type="dashed" onClick={() => setSteps([{ action: 'goto', value: '' }])}>
+                        <Button type="dashed" onClick={() => setSteps([{ action: 'goto', value: '' }])} disabled={isReadOnly}>
                           Add step
                         </Button>
                       </Space>
@@ -1069,7 +1118,7 @@ export default function TestEditorPage() {
               {exportTrigger}
             </Space>
             <Space wrap>
-              <Button onClick={handleValidateAndSave} loading={saving || validating} disabled={!isDirty || saving || validating}>
+              <Button onClick={handleValidateAndSave} loading={saving || validating} disabled={isReadOnly || !isDirty || saving || validating}>
                 Save changes
               </Button>
             </Space>

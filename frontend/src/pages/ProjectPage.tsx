@@ -18,6 +18,7 @@ import {
   Table,
   Tag,
   Tabs,
+  Tooltip,
   Typography,
   Upload,
   message
@@ -48,11 +49,15 @@ import {
   deleteChannel,
   deleteEnvironment,
   deleteSchedule,
+  addProjectMember,
+  deleteProjectMember,
   getChannels,
   getEnvironments,
   getProject,
+  getProjectMembers,
   getSchedules,
   getSuites,
+  checkUserExists,
   importTestSpec,
   runSuite,
   runTestWithEnvironment,
@@ -61,7 +66,8 @@ import {
   updateChannel,
   updateEnvironment,
   updateSchedule,
-  updateProject
+  updateProject,
+  updateProjectMember
 } from '../api/client';
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
@@ -76,8 +82,10 @@ import {
 import type {
   Environment,
   NotificationChannel,
+  ProjectMember,
   ProjectCheck,
   ProjectWorkspace,
+  ProjectRole,
   RunStatus,
   Schedule,
   Suite
@@ -87,7 +95,7 @@ const { Content } = Layout;
 const { Title, Text } = Typography;
 const APP_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
-type ProjectTabKey = 'overview' | 'checks' | 'runs' | 'schedules' | 'environments' | 'alerts' | 'settings';
+type ProjectTabKey = 'overview' | 'checks' | 'runs' | 'schedules' | 'environments' | 'alerts' | 'settings' | 'members';
 type EntityMode = 'create' | 'edit';
 type ScheduleTargetType = 'suite' | 'test';
 
@@ -202,6 +210,10 @@ function formatDateTime(value: string | null | undefined) {
     minute: '2-digit',
     second: '2-digit'
   });
+}
+
+function isPotentialEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
 function resolveInitialEnvironmentId(environments: Environment[]) {
@@ -492,6 +504,7 @@ function resolveTabFromPathname(pathname: string): ProjectTabKey {
   if (pathname.endsWith('/environments')) return 'environments';
   if (pathname.endsWith('/alerts') || pathname.endsWith('/notifications')) return 'alerts';
   if (pathname.endsWith('/settings')) return 'settings';
+  if (pathname.endsWith('/members')) return 'members';
   return 'checks';
 }
 
@@ -564,27 +577,52 @@ export default function ProjectPage() {
   const [deleteProjectModalOpen, setDeleteProjectModalOpen] = useState(false);
   const [deleteProjectConfirmText, setDeleteProjectConfirmText] = useState('');
   const [deletingProject, setDeletingProject] = useState(false);
+  const [projectMembers, setProjectMembers] = useState<ProjectMember[]>([]);
+  const [memberModalOpen, setMemberModalOpen] = useState(false);
+  const [memberSaving, setMemberSaving] = useState(false);
+  const [memberLookupLoading, setMemberLookupLoading] = useState(false);
+  const [memberUserExists, setMemberUserExists] = useState<boolean | null>(null);
+  const [memberForm, setMemberForm] = useState<{ email: string; password: string; role: ProjectRole }>({
+    email: '',
+    password: '',
+    role: 'VIEWER'
+  });
   const settingsHydratedRef = useRef(false);
 
   const summary = project?.summary;
   const hasChecks = (project?.tests.length ?? 0) > 0;
+  const currentUserRole = project?.currentUserRole ?? null;
+  const isViewer = currentUserRole === 'VIEWER';
+  const isEditor = currentUserRole === 'EDITOR';
+  const isOwner = currentUserRole === 'OWNER';
+  const canWriteProject = isOwner || isEditor;
+  const canManageMembers = isOwner;
+  const canManageSchedules = canWriteProject;
+  const canManageEnvironments = canWriteProject;
+  const isProtectedAdminMember = (member: ProjectMember) => Boolean(member.isSystemAdmin);
+
+  function settledValue<T>(result: PromiseSettledResult<T>, fallback: T): T {
+    return result.status === 'fulfilled' ? result.value : fallback;
+  }
 
   const load = async () => {
     setLoading(true);
     try {
-      const [projectData, suiteData, environmentData, scheduleData, channelData] = await Promise.all([
-        getProject(projectId!),
+      const projectData = await getProject(projectId!);
+      const [suiteDataResult, environmentDataResult, scheduleDataResult, channelDataResult, memberDataResult] = await Promise.allSettled([
         getSuites(projectId!),
         getEnvironments(projectId!),
         getSchedules(projectId!),
-        getChannels(projectId!)
+        getChannels(projectId!),
+        projectData.currentUserRole === 'OWNER' ? getProjectMembers(projectId!) : Promise.resolve([])
       ]);
       setProject(projectData);
       setProjectName(projectData.name);
-      setSuites(suiteData);
-      setEnvironments(environmentData);
-      setSchedules(scheduleData);
-      setChannels(channelData);
+      setSuites(settledValue(suiteDataResult, []));
+      setEnvironments(settledValue(environmentDataResult, []));
+      setSchedules(settledValue(scheduleDataResult, []));
+      setChannels(settledValue(channelDataResult, []));
+      setProjectMembers(settledValue(memberDataResult, []));
     } finally {
       setLoading(false);
     }
@@ -604,6 +642,10 @@ export default function ProjectPage() {
     setProjectDescriptionError(null);
     setDeleteProjectConfirmText('');
     setDeleteProjectModalOpen(false);
+    setProjectMembers([]);
+    setMemberModalOpen(false);
+    setMemberLookupLoading(false);
+    setMemberUserExists(null);
   }, [projectId]);
 
   useEffect(() => {
@@ -684,6 +726,10 @@ export default function ProjectPage() {
   const scheduleFormNeedsEnvironment = scheduleFormTargetUsesVariables && !scheduleForm.environmentId;
 
   const openEnvironmentCreate = () => {
+    if (!canManageEnvironments) {
+      message.info('Read-only access');
+      return;
+    }
     setEnvironmentMode('create');
     setEditingEnvironment(null);
     setEnvironmentName('');
@@ -692,6 +738,10 @@ export default function ProjectPage() {
   };
 
   const openEnvironmentEdit = (environment: Environment) => {
+    if (!canManageEnvironments) {
+      message.info('Read-only access');
+      return;
+    }
     setEnvironmentMode('edit');
     setEditingEnvironment(environment);
     setEnvironmentName(environment.name);
@@ -700,6 +750,10 @@ export default function ProjectPage() {
   };
 
   const saveEnvironment = async () => {
+    if (!canManageEnvironments) {
+      message.info('Read-only access');
+      return;
+    }
     const validationError = validateEnvironmentRows(environmentName, environmentRows);
     if (validationError) {
       message.error(validationError);
@@ -729,6 +783,10 @@ export default function ProjectPage() {
   };
 
   const duplicateEnvironment = async (environment: Environment) => {
+    if (!canManageEnvironments) {
+      message.info('Read-only access');
+      return;
+    }
     try {
       await createEnvironment(projectId!, {
         name: `${environment.name} Copy`,
@@ -742,6 +800,10 @@ export default function ProjectPage() {
   };
 
   const openChannelCreate = (type: 'telegram' | 'slack') => {
+    if (!canWriteProject) {
+      message.info('Read-only access');
+      return;
+    }
     setChannelMode('create');
     setEditingChannel(null);
     setChannelType(type);
@@ -760,6 +822,10 @@ export default function ProjectPage() {
   };
 
   const openChannelEdit = (channel: NotificationChannel) => {
+    if (!canWriteProject) {
+      message.info('Read-only access');
+      return;
+    }
     setChannelMode('edit');
     setEditingChannel(channel);
     setChannelType(channel.type);
@@ -778,6 +844,10 @@ export default function ProjectPage() {
   };
 
   const saveChannel = async () => {
+    if (!canWriteProject) {
+      message.info('Read-only access');
+      return;
+    }
     if (!channelForm.name.trim()) {
       message.error('Alert name is required');
       return;
@@ -860,6 +930,10 @@ export default function ProjectPage() {
   };
 
   const sendChannelDraftTest = async () => {
+    if (!canWriteProject) {
+      message.info('Read-only access');
+      return;
+    }
     setChannelTestFeedback(null);
 
     if (!channelForm.name.trim()) {
@@ -908,6 +982,10 @@ export default function ProjectPage() {
   };
 
   const testExistingChannel = async (channel: NotificationChannel) => {
+    if (!canWriteProject) {
+      message.info('Read-only access');
+      return;
+    }
     try {
       await testChannel(channel.id);
       message.success('Test notification sent');
@@ -918,12 +996,20 @@ export default function ProjectPage() {
   };
 
   const deleteExistingChannel = async (channelId: string) => {
+    if (!canWriteProject) {
+      message.info('Read-only access');
+      return;
+    }
     await deleteChannel(channelId);
     message.success('Channel deleted');
     await load();
   };
 
   const toggleChannelEnabled = async (channel: NotificationChannel) => {
+    if (!canWriteProject) {
+      message.info('Read-only access');
+      return;
+    }
     try {
       await updateChannel(channel.id, { enabled: !channel.enabled });
       message.success(channel.enabled ? 'Alert paused' : 'Alert activated');
@@ -942,6 +1028,10 @@ export default function ProjectPage() {
       );
 
   const openScheduleCreate = () => {
+    if (!canManageSchedules) {
+      message.info('Read-only access');
+      return;
+    }
     setScheduleMode('create');
     setEditingSchedule(null);
     setScheduleForm({
@@ -958,6 +1048,10 @@ export default function ProjectPage() {
   };
 
   const openScheduleEdit = (schedule: Schedule) => {
+    if (!canManageSchedules) {
+      message.info('Read-only access');
+      return;
+    }
     const targetType: ScheduleTargetType = schedule.suiteId ? 'suite' : 'test';
     const preset = CRON_PRESETS.some((item) => item.value === schedule.cron) ? schedule.cron : 'custom';
     setScheduleMode('edit');
@@ -976,6 +1070,10 @@ export default function ProjectPage() {
   };
 
   const saveSchedule = async () => {
+    if (!canManageSchedules) {
+      message.info('Read-only access');
+      return;
+    }
     if (!scheduleForm.name.trim()) {
       message.error('Schedule name is required');
       return;
@@ -1036,6 +1134,10 @@ export default function ProjectPage() {
   };
 
   const runScheduleNow = async (schedule: Schedule) => {
+    if (!canManageSchedules) {
+      message.info('Read-only access');
+      return;
+    }
     try {
       if (schedule.suiteId) {
         const result = await runSuite(schedule.suiteId, schedule.environmentId ?? undefined);
@@ -1053,6 +1155,10 @@ export default function ProjectPage() {
   };
 
   const toggleSchedule = async (schedule: Schedule) => {
+    if (!canManageSchedules) {
+      message.info('Read-only access');
+      return;
+    }
     try {
       await updateSchedule(schedule.id, { enabled: !schedule.enabled });
       message.success(schedule.enabled ? 'Schedule paused' : 'Schedule resumed');
@@ -1063,6 +1169,10 @@ export default function ProjectPage() {
   };
 
   const deleteExistingSchedule = async (scheduleId: string) => {
+    if (!canManageSchedules) {
+      message.info('Read-only access');
+      return;
+    }
     await deleteSchedule(scheduleId);
     message.success('Schedule deleted');
     await load();
@@ -1167,6 +1277,10 @@ export default function ProjectPage() {
   };
 
   const openRunSuiteModal = () => {
+    if (!canWriteProject) {
+      message.warning('Read-only access cannot run suites');
+      return;
+    }
     setSelectedSuiteId(suites[0]?.id);
     setSelectedEnvironmentId(undefined);
     setRunSuiteModalOpen(true);
@@ -1251,6 +1365,10 @@ export default function ProjectPage() {
   };
 
   const openDeleteProjectModal = () => {
+    if (!isOwner) {
+      message.warning('Only the project owner can delete the project');
+      return;
+    }
     setDeleteProjectConfirmText('');
     setDeleteProjectModalOpen(true);
   };
@@ -1272,6 +1390,139 @@ export default function ProjectPage() {
     }
   };
 
+  const openMemberInvite = () => {
+    setMemberForm({ email: '', password: '', role: 'VIEWER' });
+    setMemberLookupLoading(false);
+    setMemberUserExists(null);
+    setMemberModalOpen(true);
+  };
+
+  useEffect(() => {
+    if (!memberModalOpen) {
+      setMemberLookupLoading(false);
+      setMemberUserExists(null);
+      return;
+    }
+
+    const email = memberForm.email.trim().toLowerCase();
+    if (!isPotentialEmail(email)) {
+      setMemberLookupLoading(false);
+      setMemberUserExists(null);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setMemberLookupLoading(true);
+      void checkUserExists(email)
+        .then(({ exists }) => {
+          if (cancelled) return;
+          setMemberUserExists(exists);
+          if (exists) {
+            setMemberForm((current) => ({ ...current, password: '' }));
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setMemberUserExists(null);
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setMemberLookupLoading(false);
+          }
+        });
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [memberForm.email, memberModalOpen]);
+
+  const handleCreateUserAccess = async () => {
+    if (!project) return;
+    if (!memberForm.email.trim()) {
+      message.error('Email is required');
+      return;
+    }
+
+    const email = memberForm.email.trim().toLowerCase();
+    if (!isPotentialEmail(email)) {
+      message.error('Enter a valid email address');
+      return;
+    }
+
+    let userExists = memberUserExists;
+    if (userExists === null) {
+      try {
+        const result = await checkUserExists(email);
+        userExists = result.exists;
+        setMemberUserExists(result.exists);
+        if (result.exists) {
+          setMemberForm((current) => ({ ...current, password: '' }));
+        }
+      } catch {
+        userExists = null;
+      }
+    }
+
+    const password = memberForm.password.trim();
+    if (userExists === false && !password) {
+      message.error('Password is required for a new user');
+      return;
+    }
+
+    setMemberSaving(true);
+    try {
+      await addProjectMember(project.id, {
+        email,
+        password: userExists === true ? undefined : password,
+        role: memberForm.role
+      });
+      message.success('User access created');
+      setMemberModalOpen(false);
+      await load();
+    } catch (error) {
+      const responseError =
+        error && typeof error === 'object' && 'response' in error
+          ? (error as { response?: { data?: { error?: string } } }).response?.data?.error
+          : null;
+      const errorText =
+        typeof responseError === 'string'
+          ? responseError
+          : 'Failed to create user access';
+      message.error(errorText);
+    } finally {
+      setMemberSaving(false);
+    }
+  };
+
+  const handleChangeMemberRole = async (member: ProjectMember, role: ProjectRole) => {
+    if (!project) return;
+    try {
+      await updateProjectMember(project.id, member.id, { role });
+      message.success('Member role updated');
+      await load();
+    } catch {
+      message.error('Failed to update member');
+    }
+  };
+
+  const handleRemoveMember = async (member: ProjectMember) => {
+    if (!project) return;
+    try {
+      await deleteProjectMember(project.id, member.id);
+      message.success('Member removed');
+      await load();
+    } catch (error) {
+      const responseError =
+        error && typeof error === 'object' && 'response' in error
+          ? (error as { response?: { data?: { error?: string } } }).response?.data?.error
+          : null;
+      message.error(typeof responseError === 'string' ? responseError : 'Failed to remove member');
+    }
+  };
+
   const deleteProjectReady = Boolean(
     project && deleteProjectConfirmText.trim() === project.name.trim()
   );
@@ -1288,7 +1539,8 @@ export default function ProjectPage() {
     { key: 'schedules', label: 'Schedules' },
     { key: 'environments', label: 'Environments' },
     { key: 'alerts', label: 'Alerts' },
-    { key: 'settings', label: 'Settings' }
+    { key: 'settings', label: 'Settings' },
+    ...(canManageMembers ? [{ key: 'members', label: 'Members' }] : [])
   ];
 
   const checkColumns = [
@@ -1370,54 +1622,58 @@ export default function ProjectPage() {
       fixed: 'right' as const,
       render: (_: unknown, row: ProjectCheck) => (
         <Space onClick={(event) => event.stopPropagation()} size={8}>
-          <Button size="small" type="primary" onClick={(event) => void handleRunCheck(row.id, event)}>
-            Run
-          </Button>
+          {canWriteProject ? (
+            <Button size="small" type="primary" onClick={(event) => void handleRunCheck(row.id, event)}>
+              Run
+            </Button>
+          ) : null}
           <Button size="small" onClick={() => openCheck(row.id)}>
             Open
           </Button>
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                { key: 'edit', icon: <EditOutlined />, label: 'Edit' },
-                { key: 'duplicate', icon: <CopyOutlined />, label: 'Duplicate' },
-                { key: 'export', icon: <ExportOutlined />, label: 'Export .spec.ts' },
-                { type: 'divider' },
-                { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true }
-              ],
-              onClick: ({ key, domEvent }) => {
-                domEvent.stopPropagation();
+          {canWriteProject ? (
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  { key: 'edit', icon: <EditOutlined />, label: 'Edit' },
+                  { key: 'duplicate', icon: <CopyOutlined />, label: 'Duplicate' },
+                  { key: 'export', icon: <ExportOutlined />, label: 'Export .spec.ts' },
+                  { type: 'divider' },
+                  { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true }
+                ],
+                onClick: ({ key, domEvent }) => {
+                  domEvent.stopPropagation();
 
-                if (key === 'edit') {
-                  openCheck(row.id);
-                }
+                  if (key === 'edit') {
+                    openCheck(row.id);
+                  }
 
-                if (key === 'duplicate') {
-                  void handleDuplicateCheck(row);
-                }
+                  if (key === 'duplicate') {
+                    void handleDuplicateCheck(row);
+                  }
 
-                if (key === 'export') {
-                  void handleExportCheck(row);
-                }
+                  if (key === 'export') {
+                    void handleExportCheck(row);
+                  }
 
-                if (key === 'delete') {
-                  confirmModal.confirm({
-                    title: 'Delete check?',
-                    content: `This will remove "${row.name}" and its run history.`,
-                    okText: 'Delete',
-                    okButtonProps: { danger: true },
-                    centered: true,
-                    onOk: async () => {
-                      await handleDeleteCheck(row.id);
-                    }
-                  });
+                  if (key === 'delete') {
+                    confirmModal.confirm({
+                      title: 'Delete check?',
+                      content: `This will remove "${row.name}" and its run history.`,
+                      okText: 'Delete',
+                      okButtonProps: { danger: true },
+                      centered: true,
+                      onOk: async () => {
+                        await handleDeleteCheck(row.id);
+                      }
+                    });
+                  }
                 }
-              }
-            }}
-          >
-            <Button size="small" icon={<EllipsisOutlined />} />
-          </Dropdown>
+              }}
+            >
+              <Button size="small" icon={<EllipsisOutlined />} />
+            </Dropdown>
+          ) : null}
         </Space>
       )
     }
@@ -1454,6 +1710,15 @@ export default function ProjectPage() {
                     >
                       {projectHeaderDescription}
                     </Text>
+                    {isViewer && (
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="Read-only access"
+                        description="You can view this project, but you cannot make changes."
+                        style={{ marginTop: 8, width: 'fit-content' }}
+                      />
+                    )}
                     {project && (
                       <Text type="secondary" style={{ fontSize: 12 }}>
                         {formatCreatedLabel(project.createdAt)}
@@ -1462,22 +1727,23 @@ export default function ProjectPage() {
                   </div>
 
                   <Space wrap>
-                    <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate(`/projects/${projectId}/tests/new`)}>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate(`/projects/${projectId}/tests/new`)} disabled={!canWriteProject}>
                       New Check
                     </Button>
                     <Upload
                       accept=".ts,.js"
                       showUploadList={false}
+                      disabled={!canWriteProject}
                       beforeUpload={(file) => {
                         void handleImport(file);
                         return false;
                       }}
                     >
-                      <Button icon={<UploadOutlined />} loading={importing}>
+                      <Button icon={<UploadOutlined />} loading={importing} disabled={!canWriteProject}>
                         Import .spec.ts
                       </Button>
                     </Upload>
-                    <Button icon={<PlayCircleOutlined />} onClick={openRunSuiteModal}>
+                    <Button icon={<PlayCircleOutlined />} onClick={openRunSuiteModal} disabled={!canWriteProject}>
                       Run suite
                     </Button>
                   </Space>
@@ -1640,7 +1906,7 @@ export default function ProjectPage() {
                         }
                       >
                         <Space wrap>
-                          <Button type="primary" onClick={openRunSuiteModal}>
+                          <Button type="primary" onClick={openRunSuiteModal} disabled={!canWriteProject}>
                             Run suite
                           </Button>
                           <Button onClick={() => setActiveTab('checks')}>Go to Checks</Button>
@@ -1771,21 +2037,22 @@ export default function ProjectPage() {
                     }
                   >
                     <Space wrap>
-                      <Button type="primary" onClick={() => navigate(`/projects/${projectId}/tests/new`)}>
-                        New Check
-                      </Button>
-                      <Upload
-                        accept=".ts,.js"
-                        showUploadList={false}
-                        beforeUpload={(file) => {
-                          void handleImport(file);
-                          return false;
-                        }}
-                      >
-                        <Button>Import .spec.ts</Button>
-                      </Upload>
-                    </Space>
-                  </Empty>
+                        <Button type="primary" onClick={() => navigate(`/projects/${projectId}/tests/new`)} disabled={!canWriteProject}>
+                          New Check
+                        </Button>
+                        <Upload
+                          accept=".ts,.js"
+                          showUploadList={false}
+                          disabled={!canWriteProject}
+                          beforeUpload={(file) => {
+                            void handleImport(file);
+                            return false;
+                          }}
+                        >
+                          <Button disabled={!canWriteProject}>Import .spec.ts</Button>
+                        </Upload>
+                      </Space>
+                    </Empty>
                 )}
               </Card>
             </Col>
@@ -1848,7 +2115,7 @@ export default function ProjectPage() {
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                     description="Run history will appear here once checks have been executed."
                   >
-                    <Button type="primary" onClick={openRunSuiteModal}>
+                    <Button type="primary" onClick={openRunSuiteModal} disabled={!canWriteProject}>
                       Run suite
                     </Button>
                   </Empty>
@@ -1862,7 +2129,16 @@ export default function ProjectPage() {
               <Card
                 style={{ borderRadius: 20, boxShadow: '0 18px 40px rgba(15, 23, 42, 0.08)' }}
                 title="Schedules"
-                extra={<Button type="primary" icon={<PlusOutlined />} onClick={openScheduleCreate}>New Schedule</Button>}
+                extra={
+                  <Button
+                    type={canManageSchedules ? 'primary' : 'default'}
+                    icon={<PlusOutlined />}
+                    onClick={openScheduleCreate}
+                    disabled={!canManageSchedules}
+                  >
+                    New Schedule
+                  </Button>
+                }
               >
                 <Space direction="vertical" size={8} style={{ width: '100%', marginBottom: 16 }}>
                   <Text type="secondary">Run browser checks or suites automatically on a cron expression.</Text>
@@ -1878,7 +2154,7 @@ export default function ProjectPage() {
                       </Space>
                     }
                   >
-                    <Button type="primary" onClick={openScheduleCreate}>
+                    <Button type={canManageSchedules ? 'primary' : 'default'} onClick={openScheduleCreate} disabled={!canManageSchedules}>
                       New Schedule
                     </Button>
                   </Empty>
@@ -1888,17 +2164,21 @@ export default function ProjectPage() {
                     rowKey="id"
                     loading={loading}
                     pagination={false}
-                    rowClassName={() => 'clickable-row'}
-                    onRow={(row) => ({ onClick: () => openScheduleEdit(row) })}
+                    rowClassName={() => (canManageSchedules ? 'clickable-row' : '')}
+                    onRow={(row) => (canManageSchedules ? { onClick: () => openScheduleEdit(row) } : {})}
                     columns={[
                       {
                         title: 'Schedule',
                         dataIndex: 'name',
                         render: (value: string, row: Schedule) => (
                           <Space direction="vertical" size={0}>
-                            <Button type="link" style={{ padding: 0, textAlign: 'left', fontWeight: 600 }} onClick={() => openScheduleEdit(row)}>
-                              {value}
-                            </Button>
+                            {canManageSchedules ? (
+                              <Button type="link" style={{ padding: 0, textAlign: 'left', fontWeight: 600 }} onClick={() => openScheduleEdit(row)}>
+                                {value}
+                              </Button>
+                            ) : (
+                              <Text strong>{value}</Text>
+                            )}
                             <Text type="secondary" style={{ fontSize: 12 }}>
                               {describeCron(row.cron)}
                             </Text>
@@ -1966,45 +2246,51 @@ export default function ProjectPage() {
                         title: 'Actions',
                         render: (_: unknown, row) => (
                           <Space onClick={(event) => event.stopPropagation()} size={8}>
-                            <Button size="small" onClick={() => void runScheduleNow(row)}>
-                              Run now
-                            </Button>
                             <Button size="small" onClick={() => navigate(`/schedules/${row.id}/history`)}>
                               History
                             </Button>
-                            <Button size="small" onClick={() => openScheduleEdit(row)}>
-                              Edit
-                            </Button>
-                            <Dropdown
-                              trigger={['click']}
-                              menu={{
-                                items: [
-                                  { key: 'toggle', label: row.enabled ? 'Pause' : 'Resume' },
-                                  { type: 'divider' },
-                                  { key: 'delete', label: 'Delete', danger: true }
-                                ],
-                                onClick: ({ key, domEvent }) => {
-                                  domEvent.stopPropagation();
-                                  if (key === 'toggle') {
-                                    void toggleSchedule(row);
-                                  }
-                                  if (key === 'delete') {
-                                    confirmModal.confirm({
-                                      title: 'Delete schedule?',
-                                      content: `This will remove "${row.name}" and stop automatic runs.`,
-                                      okText: 'Delete',
-                                      okButtonProps: { danger: true },
-                                      centered: true,
-                                      onOk: async () => {
-                                        await deleteExistingSchedule(row.id);
+                            {canManageSchedules ? (
+                              <>
+                                <Button size="small" onClick={() => void runScheduleNow(row)}>
+                                  Run now
+                                </Button>
+                                <Button size="small" onClick={() => openScheduleEdit(row)}>
+                                  Edit
+                                </Button>
+                                <Dropdown
+                                  trigger={['click']}
+                                  menu={{
+                                    items: [
+                                      { key: 'toggle', label: row.enabled ? 'Pause' : 'Resume' },
+                                      { type: 'divider' },
+                                      { key: 'delete', label: 'Delete', danger: true }
+                                    ],
+                                    onClick: ({ key, domEvent }) => {
+                                      domEvent.stopPropagation();
+                                      if (key === 'toggle') {
+                                        void toggleSchedule(row);
                                       }
-                                    });
-                                  }
-                                }
-                              }}
-                            >
-                              <Button size="small" icon={<EllipsisOutlined />} />
-                            </Dropdown>
+                                      if (key === 'delete') {
+                                        confirmModal.confirm({
+                                          title: 'Delete schedule?',
+                                          content: `This will remove "${row.name}" and stop automatic runs.`,
+                                          okText: 'Delete',
+                                          okButtonProps: { danger: true },
+                                          centered: true,
+                                          onOk: async () => {
+                                            await deleteExistingSchedule(row.id);
+                                          }
+                                        });
+                                      }
+                                    }
+                                  }}
+                                >
+                                  <Button size="small" icon={<EllipsisOutlined />} />
+                                </Dropdown>
+                              </>
+                            ) : (
+                              <Text type="secondary">Read-only</Text>
+                            )}
                           </Space>
                         )
                       }
@@ -2020,7 +2306,16 @@ export default function ProjectPage() {
               <Card
                 style={{ borderRadius: 20, boxShadow: '0 18px 40px rgba(15, 23, 42, 0.08)' }}
                 title="Environments"
-                extra={<Button type="primary" icon={<PlusOutlined />} onClick={openEnvironmentCreate}>New Environment</Button>}
+                extra={
+                  <Button
+                    type={canManageEnvironments ? 'primary' : 'default'}
+                    icon={<PlusOutlined />}
+                    onClick={openEnvironmentCreate}
+                    disabled={!canManageEnvironments}
+                  >
+                    New Environment
+                  </Button>
+                }
               >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', marginBottom: 16 }}>
                   <Text type="secondary">Manage variable sets used in check URLs and steps.</Text>
@@ -2037,7 +2332,7 @@ export default function ProjectPage() {
                       </div>
                     }
                   >
-                    <Button type="primary" onClick={openEnvironmentCreate}>
+                    <Button type={canManageEnvironments ? 'primary' : 'default'} onClick={openEnvironmentCreate} disabled={!canManageEnvironments}>
                       New Environment
                     </Button>
                   </Empty>
@@ -2047,17 +2342,35 @@ export default function ProjectPage() {
                     rowKey="id"
                     loading={loading}
                     pagination={false}
-                    rowClassName={() => 'clickable-row'}
-                    onRow={(row) => ({ onClick: () => openEnvironmentEdit(row) })}
+                    rowClassName={() => (canManageEnvironments ? 'clickable-row' : '')}
+                    onRow={(row) => (canManageEnvironments ? { onClick: () => openEnvironmentEdit(row) } : {})}
                     columns={[
                       {
                         title: 'Environment',
                         dataIndex: 'name',
                         render: (value: string, row) => (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-                            <Button type="link" style={{ padding: 0, textAlign: 'left', fontWeight: 600 }} onClick={() => openEnvironmentEdit(row)}>
-                              {value}
-                            </Button>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 0, alignItems: 'flex-start' }}>
+                            {canManageEnvironments ? (
+                              <Button
+                                type="link"
+                                style={{
+                                  padding: 0,
+                                  height: 'auto',
+                                  lineHeight: '20px',
+                                  textAlign: 'left',
+                                  fontWeight: 600,
+                                  display: 'inline-flex',
+                                  alignItems: 'center'
+                                }}
+                                onClick={() => openEnvironmentEdit(row)}
+                              >
+                                {value}
+                              </Button>
+                            ) : (
+                              <Text strong style={{ lineHeight: '20px' }}>
+                                {value}
+                              </Text>
+                            )}
                             <Text type="secondary" style={{ fontSize: 12 }}>
                               {Object.keys(row.variables).length} variables
                             </Text>
@@ -2081,41 +2394,47 @@ export default function ProjectPage() {
                         title: 'Actions',
                         render: (_: unknown, row) => (
                           <Space onClick={(event) => event.stopPropagation()} size={8}>
-                            <Button size="small" onClick={() => openEnvironmentEdit(row)}>
-                              Edit
-                            </Button>
-                            <Dropdown
-                              trigger={['click']}
-                              menu={{
-                                items: [
-                                  { key: 'duplicate', icon: <CopyOutlined />, label: 'Duplicate' },
-                                  { type: 'divider' },
-                                  { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true }
-                                ],
-                                onClick: ({ key, domEvent }) => {
-                                  domEvent.stopPropagation();
-                                  if (key === 'duplicate') {
-                                    void duplicateEnvironment(row);
-                                  }
-                                  if (key === 'delete') {
-                                    confirmModal.confirm({
-                                      title: 'Delete environment?',
-                                      content: `This will remove "${row.name}" and stop variable reuse.`,
-                                      okText: 'Delete',
-                                      okButtonProps: { danger: true },
-                                      centered: true,
-                                      onOk: async () => {
-                                        await deleteEnvironment(row.id);
-                                        message.success('Environment deleted');
-                                        await load();
+                            {canManageEnvironments ? (
+                              <>
+                                <Button size="small" onClick={() => openEnvironmentEdit(row)}>
+                                  Edit
+                                </Button>
+                                <Dropdown
+                                  trigger={['click']}
+                                  menu={{
+                                    items: [
+                                      { key: 'duplicate', icon: <CopyOutlined />, label: 'Duplicate' },
+                                      { type: 'divider' },
+                                      { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true }
+                                    ],
+                                    onClick: ({ key, domEvent }) => {
+                                      domEvent.stopPropagation();
+                                      if (key === 'duplicate') {
+                                        void duplicateEnvironment(row);
                                       }
-                                    });
-                                  }
-                                }
-                              }}
-                            >
-                              <Button size="small" icon={<EllipsisOutlined />} />
-                            </Dropdown>
+                                      if (key === 'delete') {
+                                        confirmModal.confirm({
+                                          title: 'Delete environment?',
+                                          content: `This will remove "${row.name}" and stop variable reuse.`,
+                                          okText: 'Delete',
+                                          okButtonProps: { danger: true },
+                                          centered: true,
+                                          onOk: async () => {
+                                            await deleteEnvironment(row.id);
+                                            message.success('Environment deleted');
+                                            await load();
+                                          }
+                                        });
+                                      }
+                                    }
+                                  }}
+                                >
+                                  <Button size="small" icon={<EllipsisOutlined />} />
+                                </Dropdown>
+                              </>
+                            ) : (
+                              <Text type="secondary">Read-only</Text>
+                            )}
                           </Space>
                         )
                       }
@@ -2133,10 +2452,10 @@ export default function ProjectPage() {
                 title="Alerts"
                 extra={
                   <Space>
-                    <Button type="primary" icon={<PlusOutlined />} onClick={() => openChannelCreate('telegram')}>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={() => openChannelCreate('telegram')} disabled={!canWriteProject}>
                       Add Telegram
                     </Button>
-                    <Button icon={<PlusOutlined />} onClick={() => openChannelCreate('slack')}>
+                    <Button icon={<PlusOutlined />} onClick={() => openChannelCreate('slack')} disabled={!canWriteProject}>
                       Add Slack
                     </Button>
                   </Space>
@@ -2157,10 +2476,10 @@ export default function ProjectPage() {
                     }
                   >
                     <Space wrap>
-                      <Button type="primary" onClick={() => openChannelCreate('telegram')}>
+                      <Button type="primary" onClick={() => openChannelCreate('telegram')} disabled={!canWriteProject}>
                         Add Telegram
                       </Button>
-                      <Button onClick={() => openChannelCreate('slack')}>Add Slack</Button>
+                      <Button onClick={() => openChannelCreate('slack')} disabled={!canWriteProject}>Add Slack</Button>
                     </Space>
                   </Empty>
                 ) : (
@@ -2169,17 +2488,35 @@ export default function ProjectPage() {
                     rowKey="id"
                     loading={loading}
                     pagination={false}
-                    rowClassName={() => 'clickable-row'}
-                    onRow={(row) => ({ onClick: () => openChannelEdit(row) })}
+                    rowClassName={() => (canWriteProject ? 'clickable-row' : '')}
+                    onRow={(row) => (canWriteProject ? { onClick: () => openChannelEdit(row) } : {})}
                     columns={[
                       {
                         title: 'Alert',
                         dataIndex: 'name',
                         render: (value: string, row) => (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-                            <Button type="link" style={{ padding: 0, textAlign: 'left', fontWeight: 600 }} onClick={() => openChannelEdit(row)}>
-                              {value}
-                            </Button>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 0, alignItems: 'flex-start' }}>
+                            {canWriteProject ? (
+                              <Button
+                                type="link"
+                                style={{
+                                  padding: 0,
+                                  height: 'auto',
+                                  lineHeight: '20px',
+                                  textAlign: 'left',
+                                  fontWeight: 600,
+                                  display: 'inline-flex',
+                                  alignItems: 'center'
+                                }}
+                                onClick={() => openChannelEdit(row)}
+                              >
+                                {value}
+                              </Button>
+                            ) : (
+                              <Text strong style={{ lineHeight: '20px' }}>
+                                {value}
+                              </Text>
+                            )}
                           </div>
                         )
                       },
@@ -2222,41 +2559,47 @@ export default function ProjectPage() {
                         title: 'Actions',
                         render: (_: unknown, row) => (
                           <Space onClick={(event) => event.stopPropagation()} size={8}>
-                            <Button size="small" onClick={() => openChannelEdit(row)}>
-                              Edit
-                            </Button>
-                            <Button size="small" onClick={() => void testExistingChannel(row)}>
-                              Send test
-                            </Button>
-                            <Dropdown
-                              trigger={['click']}
-                              menu={{
-                                items: [
-                                  { key: 'toggle', label: row.enabled ? 'Pause' : 'Activate' },
-                                  { key: 'delete', label: 'Delete', danger: true }
-                                ],
-                                onClick: ({ key, domEvent }) => {
-                                  domEvent.stopPropagation();
-                                  if (key === 'toggle') {
-                                    void toggleChannelEnabled(row);
-                                  }
-                                  if (key === 'delete') {
-                                    confirmModal.confirm({
-                                      title: 'Delete alert channel?',
-                                      content: `This will remove "${row.name}".`,
-                                      okText: 'Delete',
-                                      okButtonProps: { danger: true },
-                                      centered: true,
-                                      onOk: async () => {
-                                        await deleteExistingChannel(row.id);
+                            {canWriteProject ? (
+                              <>
+                                <Button size="small" onClick={() => openChannelEdit(row)}>
+                                  Edit
+                                </Button>
+                                <Button size="small" onClick={() => void testExistingChannel(row)}>
+                                  Send test
+                                </Button>
+                                <Dropdown
+                                  trigger={['click']}
+                                  menu={{
+                                    items: [
+                                      { key: 'toggle', label: row.enabled ? 'Pause' : 'Activate' },
+                                      { key: 'delete', label: 'Delete', danger: true }
+                                    ],
+                                    onClick: ({ key, domEvent }) => {
+                                      domEvent.stopPropagation();
+                                      if (key === 'toggle') {
+                                        void toggleChannelEnabled(row);
                                       }
-                                    });
-                                  }
-                                }
-                              }}
-                            >
-                              <Button size="small" icon={<EllipsisOutlined />} />
-                            </Dropdown>
+                                      if (key === 'delete') {
+                                        confirmModal.confirm({
+                                          title: 'Delete alert channel?',
+                                          content: `This will remove "${row.name}".`,
+                                          okText: 'Delete',
+                                          okButtonProps: { danger: true },
+                                          centered: true,
+                                          onOk: async () => {
+                                            await deleteExistingChannel(row.id);
+                                          }
+                                        });
+                                      }
+                                    }
+                                  }}
+                                >
+                                  <Button size="small" icon={<EllipsisOutlined />} />
+                                </Dropdown>
+                              </>
+                            ) : (
+                              <Text type="secondary">Read-only</Text>
+                            )}
                           </Space>
                         )
                       }
@@ -2280,6 +2623,7 @@ export default function ProjectPage() {
                               <Text type="secondary">Project name</Text>
                               <Input
                                 value={projectName}
+                                disabled={isViewer}
                                 onChange={(event) => {
                                   setProjectName(event.target.value);
                                   if (event.target.value.trim()) setProjectNameError(null);
@@ -2300,8 +2644,8 @@ export default function ProjectPage() {
                               <Text type="secondary">Default environment</Text>
                               <Select
                                 value={environments.length === 0 ? '' : projectDefaultEnvironmentId}
+                                disabled={isViewer || environments.length === 0}
                                 onChange={(value) => setProjectDefaultEnvironmentId(value)}
-                                disabled={environments.length === 0}
                                 placeholder="No default environment"
                                 style={{ marginTop: 8, width: '100%' }}
                                 options={[
@@ -2316,6 +2660,7 @@ export default function ProjectPage() {
                               <Text type="secondary">Description</Text>
                               <Input.TextArea
                                 value={projectDescription}
+                                disabled={isViewer}
                                 onChange={(event) => {
                                   setProjectDescription(event.target.value);
                                   if (event.target.value.length <= 500) setProjectDescriptionError(null);
@@ -2343,6 +2688,7 @@ export default function ProjectPage() {
                               <Text type="secondary">Default device</Text>
                               <Select
                                 value={projectDefaultDevice}
+                                disabled={isViewer}
                                 onChange={(value) => setProjectDefaultDevice(value)}
                                 style={{ marginTop: 8, width: '100%' }}
                                 options={DEFAULT_DEVICE_OPTIONS.map((device) => ({ label: device, value: device }))}
@@ -2351,12 +2697,12 @@ export default function ProjectPage() {
                           </Col>
                         </Row>
                         <Space wrap>
-                          <Button type="primary" loading={savingProject} onClick={() => void handleSaveProject()}>
-                            Save changes
-                          </Button>
-                          <Button onClick={handleResetProjectSettings} disabled={!project}>
-                            Reset
-                          </Button>
+                        <Button type="primary" loading={savingProject} onClick={() => void handleSaveProject()} disabled={isViewer}>
+                          Save changes
+                        </Button>
+                        <Button onClick={handleResetProjectSettings} disabled={!project || isViewer}>
+                          Reset
+                        </Button>
                         </Space>
                       </Space>
                     </Card>
@@ -2456,12 +2802,88 @@ export default function ProjectPage() {
                         Permanently delete this project, checks, schedules, environments, alerts, run history, screenshots, and traces.
                       </Text>
                     </div>
-                    <Button danger ghost onClick={openDeleteProjectModal}>
+                    <Button danger ghost onClick={openDeleteProjectModal} disabled={!isOwner}>
                       Delete project
                     </Button>
                   </Space>
                 </Card>
               </Space>
+            </Col>
+          )}
+
+          {activeTab === 'members' && canManageMembers && (
+            <Col span={24}>
+              <Card
+                style={{ borderRadius: 20, boxShadow: '0 18px 40px rgba(15, 23, 42, 0.08)' }}
+                title="Project members"
+                extra={<Button type="primary" icon={<PlusOutlined />} onClick={openMemberInvite}>Create user access</Button>}
+              >
+                <Space direction="vertical" size={8} style={{ width: '100%', marginBottom: 16 }}>
+                  <Text type="secondary">Create user access by email, password, and role.</Text>
+                </Space>
+
+                <Table<ProjectMember>
+                  dataSource={projectMembers}
+                  rowKey="id"
+                  pagination={false}
+                  columns={[
+                    {
+                      title: 'Name / Email',
+                      render: (_: unknown, row) => (
+                        <Space direction="vertical" size={0}>
+                          <Space size={6} align="center">
+                            <Text strong>{row.user?.email ?? row.email}</Text>
+                            {isProtectedAdminMember(row) && <Tag color="red">System admin</Tag>}
+                          </Space>
+                          <Text type="secondary" style={{ fontSize: 12 }}>{row.status === 'PENDING' ? 'Pending' : 'Active'}</Text>
+                        </Space>
+                      )
+                    },
+                    {
+                      title: 'Role',
+                      render: (_: unknown, row) => (
+                          <Select
+                          value={row.role}
+                          style={{ width: 150 }}
+                          options={[
+                            { label: 'Owner', value: 'OWNER' },
+                            { label: 'Editor', value: 'EDITOR' },
+                            { label: 'Viewer', value: 'VIEWER' }
+                          ]}
+                          onChange={(value) => void handleChangeMemberRole(row, value)}
+                          disabled={isProtectedAdminMember(row) || (row.role === 'OWNER' && projectMembers.filter((member) => member.role === 'OWNER').length <= 1)}
+                        />
+                      )
+                    },
+                    {
+                      title: 'Status',
+                      render: (_: unknown, row) =>
+                        row.status === 'PENDING' ? (
+                          <Tooltip title="User has not signed in with this email yet.">
+                            <Tag color="gold">Pending</Tag>
+                          </Tooltip>
+                        ) : (
+                          <Tag color="green">Active</Tag>
+                        )
+                    },
+                    {
+                      title: 'Actions',
+                      render: (_: unknown, row) => (
+                        <Space>
+                          <Button
+                            size="small"
+                            danger
+                            onClick={() => void handleRemoveMember(row)}
+                            disabled={isProtectedAdminMember(row) || (row.role === 'OWNER' && projectMembers.filter((member) => member.role === 'OWNER').length <= 1)}
+                          >
+                            Remove
+                          </Button>
+                        </Space>
+                      )
+                    }
+                  ]}
+                />
+              </Card>
             </Col>
           )}
         </Row>
@@ -2568,6 +2990,7 @@ export default function ProjectPage() {
               value={environmentName}
               onChange={(event) => setEnvironmentName(event.target.value)}
               placeholder="Dev"
+              disabled={!canManageEnvironments}
               style={{ marginTop: 8 }}
             />
           </div>
@@ -2611,6 +3034,7 @@ export default function ProjectPage() {
                       )
                     }
                     placeholder="BASE_URL"
+                    disabled={!canManageEnvironments}
                     style={{ width: '100%' }}
                   />
                   {isSecretKey(row.key) ? (
@@ -2622,6 +3046,7 @@ export default function ProjectPage() {
                         )
                       }
                       placeholder="https://dev.example.com"
+                      disabled={!canManageEnvironments}
                       style={{ width: '100%' }}
                     />
                   ) : (
@@ -2633,6 +3058,7 @@ export default function ProjectPage() {
                         )
                       }
                       placeholder="https://dev.example.com"
+                      disabled={!canManageEnvironments}
                       style={{ width: '100%' }}
                     />
                   )}
@@ -2644,7 +3070,7 @@ export default function ProjectPage() {
                         return current.filter((_, idx) => idx !== index);
                       })
                     }
-                    disabled={environmentRows.length === 1}
+                    disabled={!canManageEnvironments || environmentRows.length === 1}
                     style={{ justifySelf: 'end' }}
                   >
                     Remove
@@ -2652,7 +3078,7 @@ export default function ProjectPage() {
                 </div>
               ))}
               <div style={{ display: 'grid', gap: 8 }}>
-                <Button type="dashed" block onClick={() => setEnvironmentRows((current) => [...current, createEnvRow()])}>
+                <Button type="dashed" block onClick={() => setEnvironmentRows((current) => [...current, createEnvRow()])} disabled={!canManageEnvironments}>
                   Add variable
                 </Button>
                 <Text type="secondary" style={{ fontSize: 12 }}>
@@ -2985,6 +3411,62 @@ export default function ProjectPage() {
             <Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 12 }}>
               Type &quot;{project?.name ?? 'project'}&quot; to enable deletion.
             </Text>
+          </div>
+        </Space>
+      </Modal>
+
+      <Modal
+        title="Create user access"
+        open={memberModalOpen}
+        onCancel={() => setMemberModalOpen(false)}
+        confirmLoading={memberSaving}
+        onOk={() => void handleCreateUserAccess()}
+        okText="Create access"
+      >
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <div>
+            <Text type="secondary">Email</Text>
+            <Input
+              value={memberForm.email}
+              onChange={(event) => setMemberForm((current) => ({ ...current, email: event.target.value }))}
+              placeholder="teammate@company.com"
+              style={{ marginTop: 8 }}
+            />
+            <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+              If this email does not exist yet, a new login account will be created with this password.
+            </Text>
+          </div>
+          <div>
+            <Text type="secondary">Password</Text>
+            <Input.Password
+              value={memberForm.password}
+              onChange={(event) => setMemberForm((current) => ({ ...current, password: event.target.value }))}
+              placeholder={memberUserExists === true ? 'Not required for existing users' : 'Create a login password'}
+              disabled={memberUserExists === true}
+              style={{ marginTop: 8 }}
+            />
+            <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+              {memberLookupLoading
+                ? 'Checking whether this user already exists...'
+                : memberUserExists === true
+                  ? 'This user already exists. The password will be ignored.'
+                  : memberUserExists === false
+                    ? 'This password will be used to create a new login account.'
+                    : 'If the user already exists, the password will be ignored.'}
+            </Text>
+          </div>
+          <div>
+            <Text type="secondary">Role</Text>
+            <Select
+              value={memberForm.role}
+              onChange={(value) => setMemberForm((current) => ({ ...current, role: value as ProjectRole }))}
+              style={{ width: '100%', marginTop: 8 }}
+              options={[
+                { label: 'Owner — full project control', value: 'OWNER' },
+                { label: 'Editor — can edit and run checks', value: 'EDITOR' },
+                { label: 'Viewer — read-only access', value: 'VIEWER' }
+              ]}
+            />
           </div>
         </Space>
       </Modal>

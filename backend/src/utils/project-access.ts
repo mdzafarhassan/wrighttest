@@ -1,0 +1,189 @@
+import type { FastifyRequest } from 'fastify';
+import type { ProjectMember, ProjectMemberStatus, ProjectRole } from '@prisma/client';
+import prisma from '../prisma';
+
+export type AuthUser = {
+  userId: string;
+  email: string;
+};
+
+export type ProjectAccess = {
+  project: { id: string; name: string };
+  member: ProjectMember;
+};
+
+export type ProjectAccessError = Error & { statusCode?: number };
+
+const ROLE_RANK: Record<ProjectRole, number> = {
+  OWNER: 3,
+  EDITOR: 2,
+  VIEWER: 1
+};
+
+export const FALLBACK_ADMIN_EMAIL = 'admin@wrighttest.app';
+
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+export function getProtectedAdminEmails() {
+  return [...new Set([
+    process.env.ADMIN_EMAIL,
+    FALLBACK_ADMIN_EMAIL
+  ].filter((email): email is string => Boolean(email && email.trim())))].map(normalizeEmail);
+}
+
+export function isProtectedAdminEmail(email: string) {
+  return getProtectedAdminEmails().includes(normalizeEmail(email));
+}
+
+export function getAuthUser(request: FastifyRequest): AuthUser {
+  const payload = request.user as Partial<AuthUser> | undefined;
+  if (!payload?.userId || !payload.email) {
+    throw new Error('Unauthorized');
+  }
+  return { userId: payload.userId, email: payload.email };
+}
+
+export function hasProjectRole(memberRole: ProjectRole, allowedRoles: ProjectRole[]) {
+  return allowedRoles.includes(memberRole);
+}
+
+export async function getProjectAccess(projectId: string, userId: string): Promise<ProjectAccess | null> {
+  const [project, member] = await Promise.all([
+    prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, name: true }
+    }),
+    prisma.projectMember.findFirst({
+      where: {
+        projectId,
+        userId,
+        status: 'ACTIVE'
+      }
+    })
+  ]);
+
+  if (!project || !member) {
+    return null;
+  }
+
+  return { project, member };
+}
+
+export async function getAccessibleProjectIds(userId: string) {
+  const memberships = await prisma.projectMember.findMany({
+    where: {
+      userId,
+      status: 'ACTIVE'
+    },
+    select: {
+      projectId: true
+    }
+  });
+
+  return memberships.map((membership) => membership.projectId);
+}
+
+export async function canCreateProject(userId: string, email: string) {
+  if (isProtectedAdminEmail(email)) {
+    return true;
+  }
+
+  const editableMembership = await prisma.projectMember.findFirst({
+    where: {
+      userId,
+      status: 'ACTIVE',
+      role: {
+        in: ['OWNER', 'EDITOR']
+      }
+    },
+    select: {
+      id: true
+    }
+  });
+
+  return Boolean(editableMembership);
+}
+
+export async function requireProjectRole(projectId: string, userId: string, allowedRoles: ProjectRole[]) {
+  const access = await getProjectAccess(projectId, userId);
+  if (!access) {
+    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+    if (!project) {
+      const error = new Error('Project not found');
+      (error as ProjectAccessError).statusCode = 404;
+      throw error;
+    }
+
+    const error = new Error('Forbidden');
+    (error as ProjectAccessError).statusCode = 403;
+    throw error;
+  }
+
+  if (!hasProjectRole(access.member.role, allowedRoles)) {
+    const error = new Error('Forbidden');
+    (error as ProjectAccessError).statusCode = 403;
+    throw error;
+  }
+
+  return access;
+}
+
+export function getProjectAccessStatusCode(error: unknown) {
+  return typeof error === 'object' && error !== null && 'statusCode' in error
+    ? Number((error as ProjectAccessError).statusCode ?? 500)
+    : 500;
+}
+
+export function roleAtLeast(role: ProjectRole, requiredRole: ProjectRole) {
+  return ROLE_RANK[role] >= ROLE_RANK[requiredRole];
+}
+
+export function maskSecretValue(value: string) {
+  if (!value) return value;
+  return '••••••';
+}
+
+export function redactEnvironmentVariables(variables: Record<string, string>, viewerOnly = false) {
+  if (!viewerOnly) return variables;
+
+  return Object.fromEntries(
+    Object.entries(variables).map(([key, value]) => [key, maskSecretValue(value)])
+  );
+}
+
+export async function getProjectOwnersCount(projectId: string) {
+  return prisma.projectMember.count({
+    where: { projectId, role: 'OWNER', status: 'ACTIVE' }
+  });
+}
+
+export async function upsertProjectMember(data: {
+  projectId: string;
+  email: string;
+  userId?: string | null;
+  role: ProjectRole;
+  status?: ProjectMemberStatus;
+}) {
+  return prisma.projectMember.upsert({
+    where: {
+      projectId_email: {
+        projectId: data.projectId,
+        email: data.email
+      }
+    },
+    update: {
+      userId: data.userId ?? null,
+      role: data.role,
+      status: data.status ?? 'ACTIVE'
+    },
+    create: {
+      projectId: data.projectId,
+      email: data.email,
+      userId: data.userId ?? null,
+      role: data.role,
+      status: data.status ?? 'ACTIVE'
+    }
+  });
+}

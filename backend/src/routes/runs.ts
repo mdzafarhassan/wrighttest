@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import prisma from '../prisma';
 import { testQueue } from '../queue/queue';
+import { getAccessibleProjectIds, getAuthUser, getProjectAccessStatusCode, requireProjectRole } from '../utils/project-access';
 
 const TRACES_DIR = path.resolve(process.env.TRACES_DIR || './traces');
 
@@ -53,12 +54,19 @@ export async function runRoutes(fastify: FastifyInstance) {
 
     if (!test) return reply.status(404).send({ error: 'Test not found' });
 
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(test.projectId, userId, ['OWNER', 'EDITOR']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
+
     if (body.data.environmentId) {
       const environment = await prisma.environment.findUnique({
         where: { id: body.data.environmentId }
       });
 
-      if (!environment) {
+      if (!environment || environment.projectId !== test.projectId) {
         return reply.status(404).send({ error: 'Environment not found' });
       }
     }
@@ -99,6 +107,12 @@ export async function runRoutes(fastify: FastifyInstance) {
     });
 
     if (!run) return reply.status(404).send({ error: 'Run not found' });
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(run.test.project.id, userId, ['OWNER', 'EDITOR', 'VIEWER']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
     return {
       ...run,
       trace: await buildTraceMetadata(run)
@@ -111,6 +125,13 @@ export async function runRoutes(fastify: FastifyInstance) {
     });
 
     if (!test) return reply.status(404).send({ error: 'Test not found' });
+
+    const { userId } = getAuthUser(req);
+    try {
+      await requireProjectRole(test.projectId, userId, ['OWNER', 'EDITOR', 'VIEWER']);
+    } catch (error) {
+      return reply.status(getProjectAccessStatusCode(error)).send({ error: error instanceof Error ? error.message : 'Forbidden' });
+    }
 
     return prisma.testRun.findMany({
       where: { testId: req.params.id },

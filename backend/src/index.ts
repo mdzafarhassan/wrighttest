@@ -96,6 +96,19 @@ async function start() {
 
     try {
       await req.jwtVerify();
+      const payload = req.user as { userId?: string; email?: string } | undefined;
+      if (!payload?.userId || !payload.email) {
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { id: payload.userId },
+        select: { email: true }
+      });
+
+      if (!user || user.email !== payload.email) {
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
     } catch {
       return reply.status(401).send({ error: 'Unauthorized' });
     }

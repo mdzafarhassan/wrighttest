@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { config as loadEnv } from 'dotenv';
 import dotenvExpand from 'dotenv-expand';
+import { FALLBACK_ADMIN_EMAIL } from '../src/utils/project-access';
 
 const prisma = new PrismaClient();
 
@@ -40,16 +41,54 @@ async function seedAdminUser(email: string, password: string) {
   });
 }
 
+async function seedProjectOwners(userId: string) {
+  const projects = await prisma.project.findMany({
+    select: {
+      id: true,
+      members: {
+        where: {
+          status: 'ACTIVE'
+        },
+        select: {
+          id: true
+        }
+      }
+    }
+  });
+
+  for (const project of projects) {
+    if (project.members.length > 0) continue;
+
+    await prisma.projectMember.create({
+        data: {
+          projectId: project.id,
+          userId,
+          email: process.env.ADMIN_EMAIL ?? FALLBACK_ADMIN_EMAIL,
+          role: 'OWNER',
+          status: 'ACTIVE'
+        }
+      });
+  }
+}
+
 async function main() {
-  const defaultEmail = process.env.ADMIN_EMAIL ?? 'admin@wrighttest.com';
+  const defaultEmail = process.env.ADMIN_EMAIL ?? FALLBACK_ADMIN_EMAIL;
   const password = process.env.ADMIN_PASSWORD ?? 'changeme';
-  const adminEmails = unique([defaultEmail, 'admin@wrighttest.com', 'admin@wrighttest.app']);
+  const adminEmails = unique([defaultEmail, FALLBACK_ADMIN_EMAIL]);
 
   for (const email of adminEmails) {
     await seedAdminUser(email, password);
   }
 
   console.log(`[Seed] Admin users: ${adminEmails.join(', ')}`);
+
+  const ownerUser = await prisma.user.findUnique({
+    where: { email: defaultEmail }
+  });
+
+  if (ownerUser) {
+    await seedProjectOwners(ownerUser.id);
+  }
 
   const projectCount = await prisma.project.count();
   if (projectCount > 0) {
@@ -62,6 +101,18 @@ async function main() {
       name: DEMO_PROJECT_NAME
     }
   });
+
+  if (ownerUser) {
+    await prisma.projectMember.create({
+      data: {
+        projectId: demo.id,
+        userId: ownerUser.id,
+        email: ownerUser.email,
+        role: 'OWNER',
+        status: 'ACTIVE'
+      }
+    });
+  }
 
   const environment = await prisma.environment.create({
     data: {
