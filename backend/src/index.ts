@@ -105,7 +105,9 @@ async function start() {
       { method: 'POST', url: '/webhooks/trigger' },
       { method: 'GET', url: '/screenshots/' },
       { method: 'GET', url: '/traces/' },
+      { method: 'GET', url: '/api/traces/' },
       { method: 'GET', url: '/trace-viewer/' },
+      { method: 'GET', url: '/api/trace-viewer/' },
       { method: 'GET', url: '/trace-viewer' }
     ];
 
@@ -158,8 +160,28 @@ async function start() {
   });
 
   await fastify.register(fastifyStatic, {
+    root: tracesDir,
+    prefix: '/api/traces/',
+    decorateReply: false,
+    setHeaders: (res) => {
+      res.setHeader('Access-Control-Allow-Origin', 'https://trace.playwright.dev');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    }
+  });
+
+  await fastify.register(fastifyStatic, {
     root: traceViewerRoot,
     prefix: '/trace-viewer/',
+    decorateReply: false,
+    setHeaders: (res) => {
+      const frameAncestors = ["'self'", ...collectFrontendOrigins()].join(' ');
+      res.setHeader('Content-Security-Policy', `frame-ancestors ${frameAncestors}`);
+    }
+  });
+
+  await fastify.register(fastifyStatic, {
+    root: traceViewerRoot,
+    prefix: '/api/trace-viewer/',
     decorateReply: false,
     setHeaders: (res) => {
       const frameAncestors = ["'self'", ...collectFrontendOrigins()].join(' ');
@@ -190,6 +212,10 @@ async function start() {
 
   fastify.get('/trace-viewer', async (_, reply) => {
     return reply.redirect('/trace-viewer/', 302);
+  });
+
+  fastify.get('/api/trace-viewer', async (_, reply) => {
+    return reply.redirect('/api/trace-viewer/', 302);
   });
 
   await fastify.listen({ port, host: '0.0.0.0' });

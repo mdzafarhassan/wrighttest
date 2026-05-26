@@ -201,11 +201,11 @@ export default function RunResultPage() {
   const trace = run?.trace;
   const traceAvailable = Boolean(trace?.available);
   const traceDownloadUrl = traceAvailable
-    ? resolveBackendUrl(trace?.downloadUrl ?? (run?.tracePath ? `/traces/${run.tracePath}` : undefined))
+    ? resolveBackendUrl(trace?.downloadUrl ?? (run?.tracePath ? `/api/traces/${run.tracePath}` : undefined))
     : undefined;
   const traceViewerUrl = traceAvailable
     ? resolveBackendUrl(
-        trace?.viewerUrl ?? (run?.tracePath ? `/trace-viewer/?trace=${encodeURIComponent(`${BACKEND_URL}/traces/${run.tracePath}`)}` : undefined)
+        trace?.viewerUrl ?? (run?.tracePath ? `/trace-viewer/?trace=${encodeURIComponent(`${BACKEND_URL}/api/traces/${run.tracePath}`)}` : undefined)
       )
     : undefined;
 

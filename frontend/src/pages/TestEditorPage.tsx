@@ -386,7 +386,7 @@ export default function TestEditorPage() {
       setValidationResults(report.results);
       setValidationTracePath(report.tracePath);
       if (report.tracePath) {
-        const traceUrl = `${BACKEND_URL}/trace-viewer/?trace=${encodeURIComponent(`${BACKEND_URL}/traces/${report.tracePath}`)}`;
+        const traceUrl = `${BACKEND_URL}/trace-viewer/?trace=${encodeURIComponent(`${BACKEND_URL}/api/traces/${report.tracePath}`)}`;
         notification.info({
           message: 'Validation trace ready',
           description: (
@@ -822,7 +822,7 @@ export default function TestEditorPage() {
   }, [isDirty]);
 
   const validationTraceUrl = validationTracePath
-    ? `${BACKEND_URL}/trace-viewer/?trace=${encodeURIComponent(`${BACKEND_URL}/traces/${validationTracePath}`)}`
+    ? `${BACKEND_URL}/trace-viewer/?trace=${encodeURIComponent(`${BACKEND_URL}/api/traces/${validationTracePath}`)}`
     : undefined;
   const projectRouteId = currentProjectId ?? projectId;
   const projectLink = projectRouteId ? `/projects/${projectRouteId}` : '/projects';

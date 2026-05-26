@@ -31,8 +31,8 @@ export async function runRoutes(fastify: FastifyInstance) {
       await fs.access(path.join(TRACES_DIR, run.tracePath));
       return {
         available: true,
-        downloadUrl: `/traces/${run.tracePath}`,
-        viewerUrl: `/trace-viewer/?trace=${encodeURIComponent(`/traces/${run.tracePath}`)}`
+        downloadUrl: `/api/traces/${run.tracePath}`,
+        viewerUrl: `/trace-viewer/?trace=${encodeURIComponent(`/api/traces/${run.tracePath}`)}`
       };
     } catch {
       return {
