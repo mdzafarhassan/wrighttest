@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { Step } from '../types/step';
@@ -9,6 +10,22 @@ type ValidateRequest = {
   steps: Step[];
   device?: string;
 };
+
+function resolveValidationRunnerPath() {
+  const candidates = [
+    path.resolve(__dirname, '../../scripts/validate-runner.mjs'),
+    path.resolve(__dirname, '../../../scripts/validate-runner.mjs')
+  ];
+
+  const runnerPath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!runnerPath) {
+    throw new Error(
+      `Validation runner script not found. Looked in: ${candidates.join(', ')}`
+    );
+  }
+
+  return runnerPath;
+}
 
 function buildValidationEnv() {
   return {
@@ -36,7 +53,7 @@ export function runValidationInSubprocess(
   steps: Step[],
   device?: string
 ): ValidationReport {
-  const runnerPath = path.resolve(__dirname, '../../scripts/validate-runner.mjs');
+  const runnerPath = resolveValidationRunnerPath();
   const result = spawnSync(
     process.execPath,
     [runnerPath],
