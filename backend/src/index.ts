@@ -30,23 +30,26 @@ const envCandidates = [
 ];
 const screenshotsDir = path.resolve(process.env.SCREENSHOTS_DIR || './screenshots');
 const tracesDir = path.resolve(process.env.TRACES_DIR || './traces');
-const defaultFrontendOrigins = [
-  'http://localhost:5173',
-  'http://localhost:80',
-  'http://127.0.0.1:5173'
-];
+
+function addFrontendOrigin(origins: Set<string>, candidate?: string) {
+  if (!candidate) return;
+
+  try {
+    origins.add(new URL(candidate).origin);
+  } catch {
+    origins.add(candidate);
+  }
+}
 
 function collectFrontendOrigins() {
-  const origins = new Set<string>(defaultFrontendOrigins);
+  const origins = new Set<string>();
+
+  for (const candidate of process.env.FRONTEND_ORIGINS?.split(',') || []) {
+    addFrontendOrigin(origins, candidate.trim());
+  }
 
   for (const candidate of [process.env.FRONTEND_URL, process.env.FRONTEND_DEV_URL]) {
-    if (!candidate) continue;
-
-    try {
-      origins.add(new URL(candidate).origin);
-    } catch {
-      // Ignore invalid URLs and keep the safe defaults.
-    }
+    addFrontendOrigin(origins, candidate);
   }
 
   return [...origins];
@@ -72,8 +75,9 @@ async function start() {
   const fastify = Fastify({ logger: true });
   const port = Number(process.env.BACKEND_PORT) || 3000;
   const frontendOrigins = [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    process.env.FRONTEND_DEV_URL || 'http://localhost:5173',
+    ...collectFrontendOrigins(),
+    'http://localhost:5173',
+    'http://localhost:80',
     'http://127.0.0.1:5173'
   ];
 

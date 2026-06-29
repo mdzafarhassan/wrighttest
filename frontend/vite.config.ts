@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
   const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const env = loadEnv(mode, rootDir, '');
   const frontendPort = Number(env.FRONTEND_PORT ?? 5173);
-  const backendUrl = env.VITE_BACKEND_URL ?? `http://localhost:${env.BACKEND_PORT ?? 3000}`;
+  const backendUrl = env.VITE_BACKEND_URL;
   const packageJson = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')) as { version?: string };
 
   const readGitValue = (command: string) => {
@@ -24,6 +24,9 @@ export default defineConfig(({ mode }) => {
   const gitCommit = env.VITE_GIT_COMMIT || readGitValue('git rev-parse --short HEAD');
   const buildDate = env.VITE_BUILD_DATE || new Date().toISOString();
   const appEnvironment = env.VITE_APP_ENV || (mode === 'development' ? 'local' : mode);
+  const allowedHosts = env.VITE_ALLOWED_HOSTS
+    ? env.VITE_ALLOWED_HOSTS.split(',').map(host => host.trim())
+    : [];
 
   return {
     envDir: rootDir,
@@ -36,6 +39,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: frontendPort,
+      allowedHosts: allowedHosts,
       proxy: {
         '/api': {
           target: backendUrl,
