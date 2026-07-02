@@ -56,10 +56,11 @@ services:
       - "${BACKEND_HOST_PORT:-3000}:3000"
     environment:
       BACKEND_PORT: ${BACKEND_PORT:-3000}
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/playwright_testing
+      DATABASE_URL: ${DATABASE_URL}
       REDIS_HOST: redis
       REDIS_PORT: ${REDIS_PORT:-6379}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:${FRONTEND_HOST_PORT:-5173}}
+      FRONTEND_ORIGINS: ${FRONTEND_ORIGINS:-}
       FRONTEND_INTERNAL_URL: ${FRONTEND_INTERNAL_URL:-http://frontend:80}
       SCREENSHOTS_DIR: /app/backend/screenshots
       TRACES_DIR: /app/backend/traces

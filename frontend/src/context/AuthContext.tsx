@@ -4,6 +4,14 @@ import { api } from '../api/client';
 const TOKEN_KEY = 'wt_token';
 const EMAIL_KEY = 'wt_email';
 
+function setApiAuthToken(token: string | null) {
+  if (token) {
+    api.defaults.headers.common.Authorization = `Bearer ${token}`;
+  } else {
+    delete api.defaults.headers.common.Authorization;
+  }
+}
+
 interface AuthContextType {
   token: string | null;
   email: string | null;
@@ -25,6 +33,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    setApiAuthToken(token);
+
     const requestId = api.interceptors.request.use((config) => {
       if (token) {
         config.headers = config.headers ?? {};
@@ -39,6 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error?.response?.status === 401) {
           localStorage.removeItem(TOKEN_KEY);
           localStorage.removeItem(EMAIL_KEY);
+          setApiAuthToken(null);
           setToken(null);
           setEmail(null);
         }
@@ -74,6 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(EMAIL_KEY);
+        setApiAuthToken(null);
         if (!cancelled) {
           setToken(null);
           setEmail(null);
@@ -100,6 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     localStorage.setItem(TOKEN_KEY, data.token);
     localStorage.setItem(EMAIL_KEY, data.email);
+  setApiAuthToken(data.token);
     setToken(data.token);
     setEmail(data.email);
     setCanCreateProject(Boolean(data.canCreateProject));
@@ -110,6 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = () => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(EMAIL_KEY);
+    setApiAuthToken(null);
     setToken(null);
     setEmail(null);
     setCanCreateProject(false);

@@ -33,7 +33,9 @@ const tracesDir = path.resolve(process.env.TRACES_DIR || './traces');
 const defaultFrontendOrigins = [
   'http://localhost:5173',
   'http://localhost:80',
-  'http://127.0.0.1:5173'
+  'http://127.0.0.1:5173',
+  'https://topical-guppy-superb.ngrok-free.app',
+  'https://e02b-2401-4900-b97-b8eb-c9f1-4985-89f2-d29f.ngrok-free.app'
 ];
 
 function collectFrontendOrigins() {
@@ -47,6 +49,11 @@ function collectFrontendOrigins() {
     } catch {
       // Ignore invalid URLs and keep the safe defaults.
     }
+  }
+
+  for (const candidate of process.env.FRONTEND_ORIGINS?.split(',') ?? []) {
+    const origin = candidate.trim();
+    if (origin) origins.add(origin);
   }
 
   return [...origins];
@@ -71,11 +78,7 @@ fs.mkdirSync(tracesDir, { recursive: true });
 async function start() {
   const fastify = Fastify({ logger: true });
   const port = Number(process.env.BACKEND_PORT) || 3000;
-  const frontendOrigins = [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    process.env.FRONTEND_DEV_URL || 'http://localhost:5173',
-    'http://127.0.0.1:5173'
-  ];
+  const frontendOrigins = collectFrontendOrigins();
 
   await fastify.register(cors, {
     origin: frontendOrigins,
